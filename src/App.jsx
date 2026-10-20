@@ -239,11 +239,18 @@ const EMPTY_FORM = {
   status: 'todo',
   assignee: TEAM[0],
   dueDate: '',
+  context: '',
+  contextTool: '',
 };
 
 function TaskModal({ task, onClose, onSave, onDelete }) {
   const [form, setForm] = useState(() => task
-    ? { ...task, dueDate: task.dueDate || '' }
+    ? {
+      ...task,
+      dueDate: task.dueDate || '',
+      context: task.context || '',
+      contextTool: task.contextTool || '',
+    }
     : EMPTY_FORM);
   const [errors, setErrors] = useState({});
   const isEditing = Boolean(task);
@@ -267,6 +274,14 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
       title: form.title.trim(),
       description: form.description.trim(),
       dueDate: form.dueDate || null,
+      context: form.context.trim(),
+      contextTool: form.contextTool.trim() || null,
+      contextUpdatedAt: (() => {
+        const contextChanged = (form.context.trim() !== (task?.context || ''))
+          || ((form.contextTool.trim() || null) !== (task?.contextTool || null));
+        if (contextChanged) return new Date().toISOString();
+        return task?.contextUpdatedAt || null;
+      })(),
     });
   }
 
@@ -310,6 +325,30 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
             <label className="text-sm font-medium text-text-primary">Due date
               <input type="date" name="dueDate" value={form.dueDate} onChange={updateField} className={fieldClass} />
             </label>
+          </div>
+          <div>
+            <label htmlFor="task-context" className="text-sm font-medium text-text-primary">AI context and development notes</label>
+            <p className="mt-1 text-xs text-text-muted">Add prompts, decisions, or details that will help continue this task.</p>
+            <textarea
+              id="task-context"
+              name="context"
+              rows="4"
+              value={form.context}
+              onChange={updateField}
+              className={fieldClass}
+              placeholder="What should the next person or AI know?"
+            />
+          </div>
+          <div>
+            <label htmlFor="task-context-tool" className="text-sm font-medium text-text-primary">AI tool used <span className="font-normal text-text-muted">(optional)</span></label>
+            <input
+              id="task-context-tool"
+              name="contextTool"
+              value={form.contextTool}
+              onChange={updateField}
+              className={fieldClass}
+              placeholder="e.g. Cursor, GitHub Copilot, Codex"
+            />
           </div>
           <p className="text-xs text-text-muted">* Required fields</p>
           <div className="flex items-center justify-between border-t border-slate-100 pt-4">
