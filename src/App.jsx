@@ -243,6 +243,41 @@ const EMPTY_FORM = {
   contextTool: '',
 };
 
+function buildTaskPrompt(task) {
+  const stage = STAGES.find((item) => item.id === task.status)?.label || 'Not specified';
+  const type = task.type === 'feature' ? 'Feature' : task.type === 'bug' ? 'Bug' : 'Not specified';
+
+  return [
+    '# Continue Work on This Task',
+    '',
+    'Use the saved task information and development context below to help continue work on this task. Do not invent missing information; ask questions when more detail is needed.',
+    '',
+    '## Task Title',
+    task.title?.trim() || 'Not specified',
+    '',
+    '## Description',
+    task.description?.trim() || 'Not specified',
+    '',
+    '## Type',
+    type,
+    '',
+    '## Current Kanban Status',
+    stage,
+    '',
+    '## Owner',
+    task.assignee?.trim() || 'Not specified',
+    '',
+    '## Due Date',
+    task.dueDate || 'Not specified',
+    '',
+    '## AI Tool Used',
+    task.contextTool?.trim() || 'Not specified',
+    '',
+    '## AI Context and Development Notes',
+    task.context?.trim() || 'Not specified',
+  ].join('\n');
+}
+
 function TaskModal({ task, onClose, onSave, onDelete }) {
   const [form, setForm] = useState(() => task
     ? {
@@ -253,12 +288,25 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
     }
     : EMPTY_FORM);
   const [errors, setErrors] = useState({});
+  const [copyFeedback, setCopyFeedback] = useState('');
   const isEditing = Boolean(task);
 
   function updateField(event) {
     const { name, value } = event.target;
     setForm((current) => ({ ...current, [name]: value }));
     setErrors((current) => ({ ...current, [name]: '' }));
+  }
+
+  async function copySavedTaskContext() {
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error('Clipboard access is unavailable in this browser context.');
+      }
+      await navigator.clipboard.writeText(buildTaskPrompt(task));
+      setCopyFeedback('Copied. Paste it into your AI chat.');
+    } catch {
+      setCopyFeedback('Could not copy the prompt. Check clipboard permission and try again.');
+    }
   }
 
   function submit(event) {
@@ -350,6 +398,22 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
               placeholder="e.g. Cursor, GitHub Copilot, Codex"
             />
           </div>
+          {isEditing && (
+            <div className="border-t border-slate-100 pt-4">
+              <button
+                type="button"
+                onClick={copySavedTaskContext}
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-text-primary hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-brand-primary/30"
+              >
+                Copy as Prompt Context
+              </button>
+              {copyFeedback && (
+                <p role="status" aria-live="polite" className={`mt-2 text-sm ${copyFeedback.startsWith('Copied') ? 'text-due-safe' : 'text-due-overdue'}`}>
+                  {copyFeedback}
+                </p>
+              )}
+            </div>
+          )}
           <p className="text-xs text-text-muted">* Required fields</p>
           <div className="flex items-center justify-between border-t border-slate-100 pt-4">
             {isEditing ? (
