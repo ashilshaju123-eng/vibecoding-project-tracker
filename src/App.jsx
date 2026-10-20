@@ -123,7 +123,9 @@ export function useLocalStorage(key, initialValue) {
 }
 
 function TaskCard({ task, onStatusChange, onEdit }) {
-  const typeStripe = task.type === 'bug' ? 'border-l-type-bug' : 'border-l-type-feature';
+  const isBug = task.type === 'bug';
+  const typeStripe = isBug ? 'border-l-type-bug' : 'border-l-type-feature';
+  const typeLabelColor = isBug ? 'text-type-bug' : 'text-type-feature';
 
   return (
     <article className={`rounded-lg border border-l-4 border-[#E2E8F0] ${typeStripe} bg-surface-card p-3 hover:shadow-sm`}>
@@ -137,7 +139,10 @@ function TaskCard({ task, onStatusChange, onEdit }) {
         <p className="mt-1 text-sm font-normal text-text-muted">{task.description}</p>
       </button>
       <div className="mt-3 flex items-center justify-between gap-2">
-        <span className="font-mono text-xs text-text-muted">{task.type}</span>
+        <span className={`inline-flex items-center gap-1.5 font-mono text-xs font-medium ${typeLabelColor}`}>
+          <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${isBug ? 'bg-type-bug' : 'bg-type-feature'}`} />
+          {isBug ? 'Bug' : 'Feature'}
+        </span>
         {task.dueDate ? (
           <span className="text-xs text-text-muted">{task.dueDate}</span>
         ) : null}
