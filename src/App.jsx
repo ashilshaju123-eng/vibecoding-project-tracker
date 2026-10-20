@@ -122,13 +122,20 @@ export function useLocalStorage(key, initialValue) {
   return [value, setValue];
 }
 
-function TaskCard({ task, onStatusChange }) {
+function TaskCard({ task, onStatusChange, onEdit }) {
   const typeStripe = task.type === 'bug' ? 'border-l-type-bug' : 'border-l-type-feature';
 
   return (
     <article className={`rounded-lg border border-l-4 border-[#E2E8F0] ${typeStripe} bg-surface-card p-3 hover:shadow-sm`}>
-      <h3 className="text-sm font-medium text-text-primary">{task.title}</h3>
-      <p className="mt-1 text-sm font-normal text-text-muted">{task.description}</p>
+      <button
+        type="button"
+        onClick={() => onEdit(task)}
+        className="block w-full text-left focus:outline-none focus:ring-2 focus:ring-brand-primary/30"
+        aria-label={`Edit ${task.title}`}
+      >
+        <h3 className="text-sm font-medium text-text-primary">{task.title}</h3>
+        <p className="mt-1 text-sm font-normal text-text-muted">{task.description}</p>
+      </button>
       <div className="mt-3 flex items-center justify-between gap-2">
         <span className="font-mono text-xs text-text-muted">{task.type}</span>
         {task.dueDate ? (
@@ -150,8 +157,124 @@ function TaskCard({ task, onStatusChange }) {
   );
 }
 
+const EMPTY_FORM = {
+  title: '',
+  description: '',
+  type: 'feature',
+  status: 'todo',
+  assignee: TEAM[0],
+  dueDate: '',
+};
+
+function TaskModal({ task, onClose, onSave, onDelete }) {
+  const [form, setForm] = useState(() => task
+    ? { ...task, dueDate: task.dueDate || '' }
+    : EMPTY_FORM);
+  const [errors, setErrors] = useState({});
+  const isEditing = Boolean(task);
+
+  function updateField(event) {
+    const { name, value } = event.target;
+    setForm((current) => ({ ...current, [name]: value }));
+    setErrors((current) => ({ ...current, [name]: '' }));
+  }
+
+  function submit(event) {
+    event.preventDefault();
+    const nextErrors = {};
+    if (!form.title.trim()) nextErrors.title = 'Enter a task title.';
+    if (!form.description.trim()) nextErrors.description = 'Enter a task description.';
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length) return;
+    onSave({
+      ...form,
+      title: form.title.trim(),
+      description: form.description.trim(),
+      dueDate: form.dueDate || null,
+    });
+  }
+
+  const fieldClass = 'mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-text-primary focus:border-brand-primary focus:outline-none focus:ring-2 focus:ring-brand-primary/20';
+
+  return (
+    <div className="fixed inset-0 z-10 flex items-center justify-center bg-slate-900/50 p-4" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onClose();
+    }}>
+      <section role="dialog" aria-modal="true" aria-labelledby="task-modal-title" className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg bg-surface-card p-6">
+        <div className="mb-5 flex items-center justify-between">
+          <h2 id="task-modal-title" className="font-heading text-lg font-semibold text-text-primary">{isEditing ? 'Edit task' : 'Add task'}</h2>
+          <button type="button" onClick={onClose} className="rounded px-2 py-1 text-text-muted hover:bg-slate-100" aria-label="Close dialog">×</button>
+        </div>
+        <form onSubmit={submit} noValidate className="space-y-4">
+          <div>
+            <label htmlFor="task-title" className="text-sm font-medium text-text-primary">Title <span aria-hidden="true">*</span></label>
+            <input id="task-title" name="title" value={form.title} onChange={updateField} className={fieldClass} autoFocus aria-invalid={Boolean(errors.title)} aria-describedby={errors.title ? 'title-error' : undefined} />
+            {errors.title && <p id="title-error" className="mt-1 text-xs text-due-overdue" role="alert">{errors.title}</p>}
+          </div>
+          <div>
+            <label htmlFor="task-description" className="text-sm font-medium text-text-primary">Description <span aria-hidden="true">*</span></label>
+            <textarea id="task-description" name="description" rows="3" value={form.description} onChange={updateField} className={fieldClass} aria-invalid={Boolean(errors.description)} aria-describedby={errors.description ? 'description-error' : undefined} />
+            {errors.description && <p id="description-error" className="mt-1 text-xs text-due-overdue" role="alert">{errors.description}</p>}
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <label className="text-sm font-medium text-text-primary">Type
+              <select name="type" value={form.type} onChange={updateField} className={fieldClass}>
+                <option value="feature">Feature</option><option value="bug">Bug</option>
+              </select>
+            </label>
+            <label className="text-sm font-medium text-text-primary">Status
+              <select name="status" value={form.status} onChange={updateField} className={fieldClass}>
+                {STAGES.map((stage) => <option key={stage.id} value={stage.id}>{stage.label}</option>)}
+              </select>
+            </label>
+            <label className="text-sm font-medium text-text-primary">Assignee
+              <select name="assignee" value={form.assignee} onChange={updateField} className={fieldClass}>
+                {TEAM.map((name) => <option key={name} value={name}>{name}</option>)}
+              </select>
+            </label>
+            <label className="text-sm font-medium text-text-primary">Due date
+              <input type="date" name="dueDate" value={form.dueDate} onChange={updateField} className={fieldClass} />
+            </label>
+          </div>
+          <p className="text-xs text-text-muted">* Required fields</p>
+          <div className="flex items-center justify-between border-t border-slate-100 pt-4">
+            {isEditing ? (
+              <button type="button" onClick={onDelete} className="rounded-md px-3 py-2 text-sm font-medium text-due-overdue hover:bg-red-50">Delete task</button>
+            ) : <span />}
+            <div className="flex gap-2">
+              <button type="button" onClick={onClose} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-text-primary hover:bg-slate-50">Cancel</button>
+              <button type="submit" className="rounded-md bg-brand-primary px-3 py-2 text-sm font-medium text-white hover:bg-brand-accent">{isEditing ? 'Save changes' : 'Add task'}</button>
+            </div>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
 export default function App() {
   const [tasks, setTasks] = useLocalStorage('vibetracker.tasks', SEED_TASKS);
+  const [activeTask, setActiveTask] = useState(undefined);
+
+  function saveTask(form) {
+    if (activeTask) {
+      setTasks((current) => current.map((item) => item.id === activeTask.id ? { ...item, ...form } : item));
+    } else {
+      const today = new Date().toISOString().slice(0, 10);
+      setTasks((current) => [...current, {
+        ...form,
+        id: globalThis.crypto?.randomUUID?.() || `task-${Date.now()}`,
+        createdDate: today,
+      }]);
+    }
+    setActiveTask(undefined);
+  }
+
+  function deleteTask() {
+    if (!window.confirm('Delete this task? This cannot be undone.')) return;
+    setTasks((current) => current.filter((item) => item.id !== activeTask.id));
+    setActiveTask(undefined);
+  }
 
   function changeTaskStatus(taskId, status) {
     setTasks((currentTasks) => currentTasks.map((task) => (
@@ -181,11 +304,9 @@ export default function App() {
 
       {/* TODO M11 anchors: render the Anchor Board (Presentation / Demo / Report / Documentation) above the board. */}
 
-      {/*
-        TODO M5 crud-modal:
-          Add a "+" button that opens a modal with every Task field.
-          Clicking a card should open the same modal in edit mode.
-      */}
+      <div className="mb-4 flex justify-end">
+        <button type="button" onClick={() => setActiveTask(null)} className="rounded-md bg-brand-primary px-4 py-2 text-sm font-medium text-white hover:bg-brand-accent focus:outline-none focus:ring-2 focus:ring-brand-primary/30">Add task</button>
+      </div>
       <main className="grid grid-cols-4 gap-4">
         {STAGES.map((stage) => {
           const columnTasks = tasks.filter((task) => task.status === stage.id);
@@ -206,7 +327,7 @@ export default function App() {
                   </div>
                 ) : (
                   columnTasks.map((task) => (
-                    <TaskCard key={task.id} task={task} onStatusChange={changeTaskStatus} />
+                    <TaskCard key={task.id} task={task} onEdit={setActiveTask} onStatusChange={changeTaskStatus} />
                   ))
                 )}
               </div>
@@ -214,6 +335,15 @@ export default function App() {
           );
         })}
       </main>
+      {activeTask !== undefined && (
+        <TaskModal
+          key={activeTask?.id || 'new-task'}
+          task={activeTask}
+          onClose={() => setActiveTask(undefined)}
+          onSave={saveTask}
+          onDelete={deleteTask}
+        />
+      )}
     </div>
   );
 }
