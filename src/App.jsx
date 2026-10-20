@@ -52,6 +52,39 @@ const STAGE_BAR = {
 // Names from PRD §8 — the only valid values for Task.assignee.
 export const TEAM = ['Ashil Shaju'];
 
+function getDueDatePresentation(task, today = new Date()) {
+  const dateLabel = (dateString) => {
+    const [year, month, day] = dateString.split('-').map(Number);
+    return new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short' }).format(
+      new Date(year, month - 1, day),
+    );
+  };
+
+  if (!task.dueDate) {
+    return { label: 'No due date', color: 'text-due-neutral', background: 'bg-due-neutral/10' };
+  }
+
+  const [year, month, day] = task.dueDate.split('-').map(Number);
+  const dueOrdinal = Date.UTC(year, month - 1, day);
+  const todayOrdinal = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  const daysUntil = Math.round((dueOrdinal - todayOrdinal) / 86400000);
+  const date = dateLabel(task.dueDate);
+
+  if (task.status === 'done') {
+    return { label: `Done · ${date}`, color: 'text-due-neutral', background: 'bg-due-neutral/10' };
+  }
+  if (daysUntil < 0) {
+    return { label: `Overdue · ${date}`, color: 'text-due-overdue', background: 'bg-due-overdue/10' };
+  }
+  if (daysUntil === 0) {
+    return { label: 'Due today', color: 'text-due-warning', background: 'bg-due-warning/10' };
+  }
+  if (daysUntil === 1) {
+    return { label: 'Due tomorrow', color: 'text-due-warning', background: 'bg-due-warning/10' };
+  }
+  return { label: date, color: 'text-due-safe', background: 'bg-due-safe/10' };
+}
+
 const SEED_TASKS = [
   {
     id: 'task-prd-review',
@@ -128,6 +161,7 @@ function TaskCard({ task, onStatusChange, onEdit, onHandoff }) {
   const isBug = task.type === 'bug';
   const typeStripe = isBug ? 'border-l-type-bug' : 'border-l-type-feature';
   const typeLabelColor = isBug ? 'text-type-bug' : 'text-type-feature';
+  const dueDate = getDueDatePresentation(task);
 
   return (
     <article className={`rounded-lg border border-l-4 border-[#E2E8F0] ${typeStripe} bg-surface-card p-3 hover:shadow-sm`}>
@@ -145,9 +179,9 @@ function TaskCard({ task, onStatusChange, onEdit, onHandoff }) {
           <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${isBug ? 'bg-type-bug' : 'bg-type-feature'}`} />
           {isBug ? 'Bug' : 'Feature'}
         </span>
-        {task.dueDate ? (
-          <span className="text-xs text-text-muted">{task.dueDate}</span>
-        ) : null}
+        <span className={`rounded-full px-2 py-1 text-xs font-medium ${dueDate.color} ${dueDate.background}`}>
+          {dueDate.label}
+        </span>
       </div>
       <div className="mt-3 flex items-center justify-between gap-2 border-t border-slate-100 pt-2">
         <span className="text-xs text-text-muted">Owner</span>
