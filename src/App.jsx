@@ -162,6 +162,7 @@ function TaskCard({ task, onStatusChange, onEdit, onHandoff }) {
   const typeStripe = isBug ? 'border-l-type-bug' : 'border-l-type-feature';
   const typeLabelColor = isBug ? 'text-type-bug' : 'text-type-feature';
   const dueDate = getDueDatePresentation(task);
+  const deliverableCount = task.deliverables?.length || 0;
 
   return (
     <article className={`rounded-lg border border-l-4 border-[#E2E8F0] ${typeStripe} bg-surface-card p-3 hover:shadow-sm`}>
@@ -183,6 +184,9 @@ function TaskCard({ task, onStatusChange, onEdit, onHandoff }) {
           {dueDate.label}
         </span>
       </div>
+      {deliverableCount > 0 && (
+        <p className="mt-2 text-xs text-text-muted">{deliverableCount} {deliverableCount === 1 ? 'deliverable link' : 'deliverable links'}</p>
+      )}
       <div className="mt-3 flex items-center justify-between gap-2 border-t border-slate-100 pt-2">
         <span className="text-xs text-text-muted">Owner</span>
         <span className="max-w-[70%] truncate rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-text-primary" title={task.assignee}>
@@ -241,7 +245,17 @@ const EMPTY_FORM = {
   dueDate: '',
   context: '',
   contextTool: '',
+  deliverables: [],
 };
+
+function isValidHttpUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
 
 function buildTaskPrompt(task) {
   const stage = STAGES.find((item) => item.id === task.status)?.label || 'Not specified';
@@ -285,16 +299,41 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
       dueDate: task.dueDate || '',
       context: task.context || '',
       contextTool: task.contextTool || '',
+      deliverables: Array.isArray(task.deliverables) ? task.deliverables : [],
     }
     : EMPTY_FORM);
   const [errors, setErrors] = useState({});
   const [copyFeedback, setCopyFeedback] = useState('');
+  const [deliverableErrors, setDeliverableErrors] = useState({});
   const isEditing = Boolean(task);
 
   function updateField(event) {
     const { name, value } = event.target;
     setForm((current) => ({ ...current, [name]: value }));
     setErrors((current) => ({ ...current, [name]: '' }));
+  }
+
+  function updateDeliverable(index, field, value) {
+    setForm((current) => ({
+      ...current,
+      deliverables: current.deliverables.map((item, itemIndex) => (
+        itemIndex === index ? { ...item, [field]: value } : item
+      )),
+    }));
+    setDeliverableErrors((current) => ({ ...current, [index]: undefined }));
+  }
+
+  function validateDeliverables(deliverables) {
+    const nextErrors = {};
+    deliverables.forEach((item, index) => {
+      const label = item.label.trim();
+      const url = item.url.trim();
+      if (!label && !url) return;
+      if (!label) nextErrors[index] = 'Add a short label for this link.';
+      else if (!url) nextErrors[index] = 'Enter a URL for this link.';
+      else if (!isValidHttpUrl(url)) nextErrors[index] = 'Enter a valid http:// or https:// URL.';
+    });
+    return nextErrors;
   }
 
   async function copySavedTaskContext() {
@@ -316,7 +355,9 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
     if (!form.description.trim()) nextErrors.description = 'Enter a task description.';
     if (!form.assignee.trim()) nextErrors.assignee = 'Enter an owner name.';
     setErrors(nextErrors);
-    if (Object.keys(nextErrors).length) return;
+    const nextDeliverableErrors = validateDeliverables(form.deliverables);
+    setDeliverableErrors(nextDeliverableErrors);
+    if (Object.keys(nextErrors).length || Object.keys(nextDeliverableErrors).length) return;
     onSave({
       ...form,
       title: form.title.trim(),
@@ -324,6 +365,9 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
       dueDate: form.dueDate || null,
       context: form.context.trim(),
       contextTool: form.contextTool.trim() || null,
+      deliverables: form.deliverables
+        .filter((item) => item.label.trim() && item.url.trim())
+        .map((item) => ({ label: item.label.trim(), url: item.url.trim() })),
       contextUpdatedAt: (() => {
         const contextChanged = (form.context.trim() !== (task?.context || ''))
           || ((form.contextTool.trim() || null) !== (task?.contextTool || null));
@@ -398,6 +442,55 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
               placeholder="e.g. Cursor, GitHub Copilot, Codex"
             />
           </div>
+          <section aria-labelledby="deliverables-heading" className="space-y-3 border-t border-slate-100 pt-4">
+            <div>
+              <h3 id="deliverables-heading" className="text-sm font-semibold text-text-primary">Deliverables</h3>
+              <p className="mt-1 text-xs text-text-muted">Attach repositories, pull requests, designs, deployments, or documentation.</p>
+            </div>
+            {(form.deliverables || []).map((deliverable, index) => (
+              <div key={index} className="rounded-md border border-slate-200 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <p className="text-xs font-medium text-text-muted">Link {index + 1}</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setForm((current) => ({ ...current, deliverables: current.deliverables.filter((_, itemIndex) => itemIndex !== index) }));
+                      setDeliverableErrors((current) => {
+                        const remaining = {};
+                        Object.entries(current).forEach(([key, message]) => {
+                          if (Number(key) < index) remaining[key] = message;
+                          if (Number(key) > index) remaining[Number(key) - 1] = message;
+                        });
+                        return remaining;
+                      });
+                    }}
+                    className="text-xs font-medium text-due-overdue hover:underline"
+                    aria-label={`Remove deliverable link ${index + 1}`}
+                  >Remove</button>
+                </div>
+                <label className="mt-2 block text-xs font-medium text-text-primary" htmlFor={`deliverable-label-${index}`}>Label</label>
+                <input id={`deliverable-label-${index}`} value={deliverable.label} onChange={(event) => updateDeliverable(index, 'label', event.target.value)} className={fieldClass} placeholder="e.g. GitHub repository" />
+                <label className="mt-2 block text-xs font-medium text-text-primary" htmlFor={`deliverable-url-${index}`}>URL</label>
+                <input id={`deliverable-url-${index}`} type="url" value={deliverable.url} onChange={(event) => updateDeliverable(index, 'url', event.target.value)} className={fieldClass} placeholder="https://…" aria-invalid={Boolean(deliverableErrors[index])} />
+                {deliverableErrors[index] && <p role="alert" className="mt-1 text-xs text-due-overdue">{deliverableErrors[index]}</p>}
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() => setForm((current) => ({ ...current, deliverables: [...(current.deliverables || []), { label: '', url: '' }] }))}
+              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-text-primary hover:bg-slate-50"
+            >Add deliverable link</button>
+            {(form.deliverables || []).some((item) => item.label.trim() && item.url.trim()) && (
+              <div className="space-y-1 rounded-md bg-slate-50 p-3">
+                <p className="text-xs font-medium text-text-muted">Saved links</p>
+                {form.deliverables.filter((item) => item.label.trim() && item.url.trim() && isValidHttpUrl(item.url.trim())).map((item, index) => (
+                  <a key={`${item.url}-${index}`} href={item.url.trim()} target="_blank" rel="noopener noreferrer" className="block break-all text-sm text-brand-primary underline hover:text-brand-accent">
+                    {item.label.trim()}
+                  </a>
+                ))}
+              </div>
+            )}
+          </section>
           {isEditing && (
             <div className="border-t border-slate-100 pt-4">
               <button
