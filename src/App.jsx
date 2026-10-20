@@ -42,9 +42,58 @@ export const STAGES = [
   { id: 'done',        label: 'Done' },
 ];
 
-// Replace these placeholders with the three names from PRD §8 before M4.
-// They become the only valid values for `Task.assignee`.
-export const TEAM = ['Teammate A', 'Teammate B', 'Teammate C'];
+const STAGE_BAR = {
+  todo: 'bg-text-muted',
+  'in-progress': 'bg-brand-primary',
+  review: 'bg-due-warning',
+  done: 'bg-due-safe',
+};
+
+// Names from PRD §8 — the only valid values for Task.assignee.
+export const TEAM = ['Ashil Shaju'];
+
+const SEED_TASKS = [
+  {
+    id: 'task-prd-review',
+    title: 'Review the project PRD',
+    description: 'Confirm the locked task schema, stages, and MVP scope before building the board.',
+    type: 'feature',
+    status: 'done',
+    assignee: 'Ashil Shaju',
+    dueDate: '2026-10-18',
+    createdDate: '2026-10-16',
+  },
+  {
+    id: 'task-kanban-board',
+    title: 'Render the four-column Kanban board',
+    description: 'Show To Do, In Progress, Review and Done with sample cards from localStorage.',
+    type: 'feature',
+    status: 'in-progress',
+    assignee: 'Ashil Shaju',
+    dueDate: '2026-10-20',
+    createdDate: '2026-10-19',
+  },
+  {
+    id: 'task-empty-column',
+    title: 'Empty Review column looks broken',
+    description: 'Check that a stage with no cards still shows the empty-state copy instead of collapsing.',
+    type: 'bug',
+    status: 'todo',
+    assignee: 'Ashil Shaju',
+    dueDate: '2026-10-22',
+    createdDate: '2026-10-20',
+  },
+  {
+    id: 'task-modal-fields',
+    title: 'Add the task create and edit modal',
+    description: 'Collect title, description, type, assignee and due date. Modal is milestone M5.',
+    type: 'feature',
+    status: 'todo',
+    assignee: 'Ashil Shaju',
+    dueDate: '2026-10-23',
+    createdDate: '2026-10-20',
+  },
+];
 
 /**
  * A tiny localStorage hook — survives reloads, no library needed.
@@ -73,10 +122,43 @@ export function useLocalStorage(key, initialValue) {
   return [value, setValue];
 }
 
+function TaskCard({ task, onStatusChange }) {
+  const typeStripe = task.type === 'bug' ? 'border-l-type-bug' : 'border-l-type-feature';
+
+  return (
+    <article className={`rounded-lg border border-l-4 border-[#E2E8F0] ${typeStripe} bg-surface-card p-3 hover:shadow-sm`}>
+      <h3 className="text-sm font-medium text-text-primary">{task.title}</h3>
+      <p className="mt-1 text-sm font-normal text-text-muted">{task.description}</p>
+      <div className="mt-3 flex items-center justify-between gap-2">
+        <span className="font-mono text-xs text-text-muted">{task.type}</span>
+        {task.dueDate ? (
+          <span className="text-xs text-text-muted">{task.dueDate}</span>
+        ) : null}
+      </div>
+      <label className="mt-3 flex items-center justify-between gap-2 border-t border-slate-100 pt-2 text-xs text-text-muted">
+        <span>Move to</span>
+        <select
+          aria-label={`Move ${task.title} to another stage`}
+          className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-text-primary focus:border-brand-primary focus:outline-none focus:ring-2 focus:ring-brand-primary/20"
+          value={task.status}
+          onChange={(event) => onStatusChange(task.id, event.target.value)}
+        >
+          {STAGES.map((stage) => <option key={stage.id} value={stage.id}>{stage.label}</option>)}
+        </select>
+      </label>
+    </article>
+  );
+}
+
 export default function App() {
-  // TODO M4 data-model:
-  //   const [tasks, setTasks] = useLocalStorage('vibetracker.tasks', [/* 3-4 seed tasks */]);
-  //
+  const [tasks, setTasks] = useLocalStorage('vibetracker.tasks', SEED_TASKS);
+
+  function changeTaskStatus(taskId, status) {
+    setTasks((currentTasks) => currentTasks.map((task) => (
+      task.id === taskId ? { ...task, status } : task
+    )));
+  }
+
   // TODO M5 crud-modal:
   //   const [editing, setEditing] = useState(null);
   //
@@ -84,15 +166,15 @@ export default function App() {
   //   const [anchors, setAnchors] = useLocalStorage('vibetracker.anchors', [...]);
 
   return (
-    <div className="min-h-screen p-6">
+    <div className="min-h-screen bg-surface-page p-6 font-sans text-text-primary">
       <header className="mb-6 flex items-end justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">
+          <h1 className="flex items-center gap-2 font-heading text-2xl font-semibold text-text-primary">
+            <span className="inline-block h-2 w-2 bg-brand-primary" aria-hidden="true" />
             Vibecoding Project Tracker
           </h1>
-          <p className="text-sm text-slate-500">
-            {/* Replace this line with your team name from PRD §11. */}
-            Team starter
+          <p className="mt-1 text-sm text-text-muted">
+            Ashil Shaju
           </p>
         </div>
       </header>
@@ -100,17 +182,37 @@ export default function App() {
       {/* TODO M11 anchors: render the Anchor Board (Presentation / Demo / Report / Documentation) above the board. */}
 
       {/*
-        TODO M4 data-model:
-          Render a Kanban board with the four columns from STAGES.
-          Each column should display the tasks whose status matches its id.
-          Pre-populate 3-4 mock tasks so the board isn't empty on first load.
-
         TODO M5 crud-modal:
           Add a "+" button that opens a modal with every Task field.
           Clicking a card should open the same modal in edit mode.
       */}
-      <main className="flex h-64 items-center justify-center rounded-lg border-2 border-dashed border-slate-300 text-slate-400">
-        Build the four-column board here · M4
+      <main className="grid grid-cols-4 gap-4">
+        {STAGES.map((stage) => {
+          const columnTasks = tasks.filter((task) => task.status === stage.id);
+
+          return (
+            <section key={stage.id} className="min-h-[24rem]">
+              <div className={`h-[3px] w-full ${STAGE_BAR[stage.id]}`} />
+              <div className="mt-3 flex items-baseline justify-between">
+                <h2 className="text-base font-semibold uppercase tracking-wide text-text-primary">
+                  {stage.label}
+                </h2>
+                <span className="text-xs text-text-muted">{columnTasks.length}</span>
+              </div>
+              <div className="mt-3 flex flex-col gap-3">
+                {columnTasks.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-[#E2E8F0] px-3 py-6 text-center text-sm text-text-muted">
+                    No tasks in this stage.
+                  </div>
+                ) : (
+                  columnTasks.map((task) => (
+                    <TaskCard key={task.id} task={task} onStatusChange={changeTaskStatus} />
+                  ))
+                )}
+              </div>
+            </section>
+          );
+        })}
       </main>
     </div>
   );
