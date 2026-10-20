@@ -93,11 +93,11 @@ Four columns, in this order, with these exact labels in the UI:
 
 Fill these in before tagging `prd-done`:
 
-| Slot | Name | GitHub handle |
-|---|---|---|
-| Teammate A | `<TODO>` | `<TODO>` |
-| Teammate B | `<TODO>` | `<TODO>` |
-| Teammate C | `<TODO>` | `<TODO>` |
+| Slot | Name          | GitHub handle |
+|---|---------------|---|
+| Teammate A | `Ashil Shaju` | `ashilshaju123-eng` |
+| Teammate B | `<TODO>`      | `<TODO>` |
+| Teammate C | `<TODO>`      | `<TODO>` |
 
 These three names become the **only** allowed values for `Task.assignee`. No auth — just a dropdown.
 
@@ -143,7 +143,7 @@ Keep the Context field of each real task up to date as you work. By the end of t
 
 Fill in:
 
-- **Team name:** `<TODO>`
+- **Team name:** `Ashil Shaju`
 - **Tagline (one sentence):** `<TODO>`
 - **Tracker URL after deploy:** `<TODO>` (Vercel will give it to you)
 
