@@ -85,6 +85,16 @@ function getDueDatePresentation(task, today = new Date()) {
   return { label: date, color: 'text-due-safe', background: 'bg-due-safe/10' };
 }
 
+function getHandoffReadiness(task) {
+  const checks = [
+    { label: 'Description added', complete: Boolean(task.description?.trim()) },
+    { label: 'Owner assigned', complete: Boolean(task.assignee?.trim()) },
+    { label: 'AI context or development notes added', complete: Boolean(task.context?.trim()) },
+    { label: 'AI tool name added', complete: Boolean(task.contextTool?.trim()) },
+  ];
+  return { checks, ready: checks.every((check) => check.complete) };
+}
+
 const SEED_TASKS = [
   {
     id: 'task-prd-review',
@@ -163,6 +173,7 @@ function TaskCard({ task, onStatusChange, onEdit, onHandoff }) {
   const typeLabelColor = isBug ? 'text-type-bug' : 'text-type-feature';
   const dueDate = getDueDatePresentation(task);
   const deliverableCount = task.deliverables?.length || 0;
+  const handoffReadiness = getHandoffReadiness(task);
 
   return (
     <article className={`rounded-lg border border-l-4 border-[#E2E8F0] ${typeStripe} bg-surface-card p-3 hover:shadow-sm`}>
@@ -187,6 +198,14 @@ function TaskCard({ task, onStatusChange, onEdit, onHandoff }) {
       {deliverableCount > 0 && (
         <p className="mt-2 text-xs text-text-muted">{deliverableCount} {deliverableCount === 1 ? 'deliverable link' : 'deliverable links'}</p>
       )}
+      <p
+        role="status"
+        aria-label={`AI handoff readiness: ${handoffReadiness.ready ? 'Ready' : 'Needs context'}`}
+        className={`mt-2 inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium ${handoffReadiness.ready ? 'bg-due-safe/10 text-due-safe' : 'bg-due-warning/10 text-due-warning'}`}
+      >
+        <span aria-hidden="true">{handoffReadiness.ready ? '✓' : '!'}</span>
+        {handoffReadiness.ready ? 'Ready' : 'Needs context'}
+      </p>
       <div className="mt-3 flex items-center justify-between gap-2 border-t border-slate-100 pt-2">
         <span className="text-xs text-text-muted">Owner</span>
         <span className="max-w-[70%] truncate rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-text-primary" title={task.assignee}>
@@ -306,6 +325,7 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
   const [copyFeedback, setCopyFeedback] = useState('');
   const [deliverableErrors, setDeliverableErrors] = useState({});
   const isEditing = Boolean(task);
+  const handoffReadiness = getHandoffReadiness(task || {});
 
   function updateField(event) {
     const { name, value } = event.target;
@@ -442,6 +462,26 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
               placeholder="e.g. Cursor, GitHub Copilot, Codex"
             />
           </div>
+          <section aria-labelledby="handoff-readiness-heading" className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <h3 id="handoff-readiness-heading" className="text-sm font-semibold text-text-primary">Handoff readiness</h3>
+              <span className={`rounded-full px-2 py-1 text-xs font-medium ${handoffReadiness.ready ? 'bg-due-safe/10 text-due-safe' : 'bg-due-warning/10 text-due-warning'}`}>
+                {handoffReadiness.ready ? 'Ready' : 'Needs context'}
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-text-muted">
+              {isEditing ? 'Based on saved task details.' : 'Readiness updates after you save the task.'}
+            </p>
+            <ul className="mt-2 space-y-1">
+              {handoffReadiness.checks.map((check) => (
+                <li key={check.label} className={`flex items-center gap-2 text-xs ${check.complete ? 'text-due-safe' : 'text-due-warning'}`}>
+                  <span aria-hidden="true" className="font-semibold">{check.complete ? '✓' : '!'}</span>
+                  <span>{check.label}</span>
+                  <span className="ml-auto font-medium">{check.complete ? 'Complete' : 'Missing'}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
           <section aria-labelledby="deliverables-heading" className="space-y-3 border-t border-slate-100 pt-4">
             <div>
               <h3 id="deliverables-heading" className="text-sm font-semibold text-text-primary">Deliverables</h3>
