@@ -52,6 +52,13 @@ const STAGE_BAR = {
 // Names from PRD §8 — the only valid values for Task.assignee.
 export const TEAM = ['Ashil Shaju'];
 
+function getLocalIsoDate(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 function getDueDatePresentation(task, today = new Date()) {
   const dateLabel = (dateString) => {
     const [year, month, day] = dateString.split('-').map(Number);
@@ -327,6 +334,14 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
   const isEditing = Boolean(task);
   const handoffReadiness = getHandoffReadiness(task || {});
 
+  useEffect(() => {
+    function handleKeyDown(event) {
+      if (event.key === 'Escape') onClose();
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
   function updateField(event) {
     const { name, value } = event.target;
     setForm((current) => ({ ...current, [name]: value }));
@@ -572,11 +587,10 @@ export default function App() {
     if (activeTask) {
       setTasks((current) => current.map((item) => item.id === activeTask.id ? { ...item, ...form } : item));
     } else {
-      const today = new Date().toISOString().slice(0, 10);
       setTasks((current) => [...current, {
         ...form,
         id: globalThis.crypto?.randomUUID?.() || `task-${Date.now()}`,
-        createdDate: today,
+        createdDate: getLocalIsoDate(),
       }]);
     }
     setActiveTask(undefined);
