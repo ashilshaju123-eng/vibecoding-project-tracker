@@ -122,7 +122,9 @@ export function useLocalStorage(key, initialValue) {
   return [value, setValue];
 }
 
-function TaskCard({ task, onStatusChange, onEdit }) {
+function TaskCard({ task, onStatusChange, onEdit, onHandoff }) {
+  const [handoffOpen, setHandoffOpen] = useState(false);
+  const [newOwner, setNewOwner] = useState('');
   const isBug = task.type === 'bug';
   const typeStripe = isBug ? 'border-l-type-bug' : 'border-l-type-feature';
   const typeLabelColor = isBug ? 'text-type-bug' : 'text-type-feature';
@@ -147,6 +149,40 @@ function TaskCard({ task, onStatusChange, onEdit }) {
           <span className="text-xs text-text-muted">{task.dueDate}</span>
         ) : null}
       </div>
+      <div className="mt-3 flex items-center justify-between gap-2 border-t border-slate-100 pt-2">
+        <span className="text-xs text-text-muted">Owner</span>
+        <span className="max-w-[70%] truncate rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-text-primary" title={task.assignee}>
+          {task.assignee || 'Unassigned'}
+        </span>
+      </div>
+      {handoffOpen ? (
+        <form
+          className="mt-2 flex gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const owner = newOwner.trim();
+            if (!owner || owner === task.assignee) return;
+            onHandoff(task.id, owner);
+            setNewOwner('');
+            setHandoffOpen(false);
+          }}
+        >
+          <input
+            autoFocus
+            aria-label={`New owner for ${task.title}`}
+            placeholder="Enter name"
+            value={newOwner}
+            onChange={(event) => setNewOwner(event.target.value)}
+            className="min-w-0 flex-1 rounded-md border border-slate-300 px-2 py-1.5 text-xs focus:border-brand-primary focus:outline-none focus:ring-2 focus:ring-brand-primary/20"
+          />
+          <button type="submit" className="rounded-md bg-brand-primary px-2.5 py-1.5 text-xs font-medium text-white hover:bg-brand-accent">Hand off</button>
+          <button type="button" onClick={() => setHandoffOpen(false)} className="rounded-md border border-slate-300 px-2 py-1.5 text-xs text-text-primary">Cancel</button>
+        </form>
+      ) : (
+        <button type="button" onClick={() => setHandoffOpen(true)} className="mt-2 text-xs font-medium text-brand-primary hover:text-brand-accent">
+          Hand off to…
+        </button>
+      )}
       <label className="mt-3 flex items-center justify-between gap-2 border-t border-slate-100 pt-2 text-xs text-text-muted">
         <span>Move to</span>
         <select
@@ -189,6 +225,7 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
     const nextErrors = {};
     if (!form.title.trim()) nextErrors.title = 'Enter a task title.';
     if (!form.description.trim()) nextErrors.description = 'Enter a task description.';
+    if (!form.assignee.trim()) nextErrors.assignee = 'Enter an owner name.';
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length) return;
     onSave({
@@ -233,9 +270,8 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
               </select>
             </label>
             <label className="text-sm font-medium text-text-primary">Assignee
-              <select name="assignee" value={form.assignee} onChange={updateField} className={fieldClass}>
-                {TEAM.map((name) => <option key={name} value={name}>{name}</option>)}
-              </select>
+              <input name="assignee" value={form.assignee} onChange={updateField} className={fieldClass} placeholder="Enter owner name" aria-invalid={Boolean(errors.assignee)} />
+              {errors.assignee && <span className="mt-1 block text-xs text-due-overdue" role="alert">{errors.assignee}</span>}
             </label>
             <label className="text-sm font-medium text-text-primary">Due date
               <input type="date" name="dueDate" value={form.dueDate} onChange={updateField} className={fieldClass} />
@@ -260,6 +296,7 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
 export default function App() {
   const [tasks, setTasks] = useLocalStorage('vibetracker.tasks', SEED_TASKS);
   const [activeTask, setActiveTask] = useState(undefined);
+  const [notice, setNotice] = useState('');
 
   function saveTask(form) {
     if (activeTask) {
@@ -287,6 +324,11 @@ export default function App() {
     )));
   }
 
+  function handoffTask(taskId, assignee) {
+    setTasks((current) => current.map((task) => task.id === taskId ? { ...task, assignee } : task));
+    setNotice(`Handed off to ${assignee}.`);
+  }
+
   // TODO M5 crud-modal:
   //   const [editing, setEditing] = useState(null);
   //
@@ -312,6 +354,11 @@ export default function App() {
       <div className="mb-4 flex justify-end">
         <button type="button" onClick={() => setActiveTask(null)} className="rounded-md bg-brand-primary px-4 py-2 text-sm font-medium text-white hover:bg-brand-accent focus:outline-none focus:ring-2 focus:ring-brand-primary/30">Add task</button>
       </div>
+      {notice && (
+        <p role="status" aria-live="polite" className="mb-4 rounded-md border border-emerald-200 bg-white px-3 py-2 text-sm text-due-safe">
+          {notice}
+        </p>
+      )}
       <main className="grid grid-cols-4 gap-4">
         {STAGES.map((stage) => {
           const columnTasks = tasks.filter((task) => task.status === stage.id);
@@ -332,7 +379,7 @@ export default function App() {
                   </div>
                 ) : (
                   columnTasks.map((task) => (
-                    <TaskCard key={task.id} task={task} onEdit={setActiveTask} onStatusChange={changeTaskStatus} />
+                    <TaskCard key={task.id} task={task} onEdit={setActiveTask} onStatusChange={changeTaskStatus} onHandoff={handoffTask} />
                   ))
                 )}
               </div>
