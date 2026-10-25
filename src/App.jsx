@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 /**
  * Vibecoding Project Tracker — starter scaffold.
@@ -51,6 +51,13 @@ const STAGE_BAR = {
 
 // Names from PRD §8 — the only valid values for Task.assignee.
 export const TEAM = ['Ashil Shaju'];
+
+const ANCHOR_SLOTS = [
+  { id: 'presentation', label: 'Presentation', url: null },
+  { id: 'demo', label: 'Demo', url: null },
+  { id: 'report', label: 'Report', url: null },
+  { id: 'documentation', label: 'Documentation', url: null },
+];
 
 function getLocalIsoDate(date = new Date()) {
   const year = date.getFullYear();
@@ -239,11 +246,11 @@ function TaskCard({ task, onStatusChange, onEdit, onHandoff }) {
             onChange={(event) => setNewOwner(event.target.value)}
             className="min-w-0 flex-1 rounded-md border border-slate-300 px-2 py-1.5 text-xs focus:border-brand-primary focus:outline-none focus:ring-2 focus:ring-brand-primary/20"
           />
-          <button type="submit" className="rounded-md bg-brand-primary px-2.5 py-1.5 text-xs font-medium text-white hover:bg-brand-accent">Hand off</button>
-          <button type="button" onClick={() => setHandoffOpen(false)} className="rounded-md border border-slate-300 px-2 py-1.5 text-xs text-text-primary">Cancel</button>
+          <button type="submit" className="rounded-md bg-brand-primary px-2.5 py-1.5 text-xs font-medium text-white hover:bg-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40">Hand off</button>
+          <button type="button" onClick={() => setHandoffOpen(false)} className="rounded-md border border-slate-300 px-2 py-1.5 text-xs text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40">Cancel</button>
         </form>
       ) : (
-        <button type="button" onClick={() => setHandoffOpen(true)} className="mt-2 text-xs font-medium text-brand-primary hover:text-brand-accent">
+        <button type="button" onClick={() => setHandoffOpen(true)} className="mt-2 text-xs font-medium text-brand-primary hover:text-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40">
           Hand off to…
         </button>
       )}
@@ -332,16 +339,39 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
   const [copyFeedback, setCopyFeedback] = useState('');
   const [deliverableErrors, setDeliverableErrors] = useState({});
   const isEditing = Boolean(task);
-  const handoffReadiness = getHandoffReadiness(task || {});
+  const handoffReadiness = getHandoffReadiness(form);
+
+  const dialogRef = useRef(null);
 
   useEffect(() => {
     function handleKeyDown(event) {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+
+      const focusable = dialogRef.current?.querySelectorAll(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      if (!focusable?.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!dialogRef.current.contains(document.activeElement)) {
+        event.preventDefault();
+        first.focus();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onClose]);
-
   function updateField(event) {
     const { name, value } = event.target;
     setForm((current) => ({ ...current, [name]: value }));
@@ -418,10 +448,10 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
     <div className="fixed inset-0 z-10 flex items-center justify-center bg-slate-900/50 p-4" onMouseDown={(event) => {
       if (event.target === event.currentTarget) onClose();
     }}>
-      <section role="dialog" aria-modal="true" aria-labelledby="task-modal-title" className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg bg-surface-card p-6">
+      <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="task-modal-title" className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg bg-surface-card p-6">
         <div className="mb-5 flex items-center justify-between">
           <h2 id="task-modal-title" className="font-heading text-lg font-semibold text-text-primary">{isEditing ? 'Edit task' : 'Add task'}</h2>
-          <button type="button" onClick={onClose} className="rounded px-2 py-1 text-text-muted hover:bg-slate-100" aria-label="Close dialog">×</button>
+          <button type="button" onClick={onClose} aria-label="Close dialog" className="rounded px-2 py-1 text-text-muted hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40">×</button>
         </div>
         <form onSubmit={submit} noValidate className="space-y-4">
           <div>
@@ -485,7 +515,7 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
               </span>
             </div>
             <p className="mt-1 text-xs text-text-muted">
-              {isEditing ? 'Based on saved task details.' : 'Readiness updates after you save the task.'}
+              Updates as you edit these fields.
             </p>
             <ul className="mt-2 space-y-1">
               {handoffReadiness.checks.map((check) => (
@@ -519,7 +549,7 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
                         return remaining;
                       });
                     }}
-                    className="text-xs font-medium text-due-overdue hover:underline"
+                    className="text-xs font-medium text-due-overdue hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40"
                     aria-label={`Remove deliverable link ${index + 1}`}
                   >Remove</button>
                 </div>
@@ -555,6 +585,8 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
               >
                 Copy as Prompt Context
               </button>
+              <p className="mt-2 text-xs text-text-muted">Copies saved task values. Save changes before copying to include your edits.</p>
+
               {copyFeedback && (
                 <p role="status" aria-live="polite" className={`mt-2 text-sm ${copyFeedback.startsWith('Copied') ? 'text-due-safe' : 'text-due-overdue'}`}>
                   {copyFeedback}
@@ -565,11 +597,11 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
           <p className="text-xs text-text-muted">* Required fields</p>
           <div className="flex items-center justify-between border-t border-slate-100 pt-4">
             {isEditing ? (
-              <button type="button" onClick={onDelete} className="rounded-md px-3 py-2 text-sm font-medium text-due-overdue hover:bg-red-50">Delete task</button>
+              <button type="button" onClick={onDelete} className="rounded-md px-3 py-2 text-sm font-medium text-due-overdue hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40">Delete task</button>
             ) : <span />}
             <div className="flex gap-2">
-              <button type="button" onClick={onClose} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-text-primary hover:bg-slate-50">Cancel</button>
-              <button type="submit" className="rounded-md bg-brand-primary px-3 py-2 text-sm font-medium text-white hover:bg-brand-accent">{isEditing ? 'Save changes' : 'Add task'}</button>
+              <button type="button" onClick={onClose} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-text-primary hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40">Cancel</button>
+              <button type="submit" className="rounded-md bg-brand-primary px-3 py-2 text-sm font-medium text-white hover:bg-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40">{isEditing ? 'Save changes' : 'Add task'}</button>
             </div>
           </div>
         </form>
@@ -582,9 +614,29 @@ export default function App() {
   const [tasks, setTasks] = useLocalStorage('vibetracker.tasks', SEED_TASKS);
   const [activeTask, setActiveTask] = useState(undefined);
   const [notice, setNotice] = useState('');
+  const modalTriggerRef = useRef(null);
+  const addTaskButtonRef = useRef(null);
+
+  function restoreModalFocus() {
+    requestAnimationFrame(() => {
+      const trigger = modalTriggerRef.current;
+      (trigger?.isConnected ? trigger : addTaskButtonRef.current)?.focus();
+    });
+  }
+
+  function openTaskModal(task) {
+    modalTriggerRef.current = document.activeElement;
+    setActiveTask(task);
+  }
+
+  function closeTaskModal() {
+    setActiveTask(undefined);
+    restoreModalFocus();
+  }
 
   function saveTask(form) {
-    if (activeTask) {
+    const wasEditing = Boolean(activeTask);
+    if (wasEditing) {
       setTasks((current) => current.map((item) => item.id === activeTask.id ? { ...item, ...form } : item));
     } else {
       setTasks((current) => [...current, {
@@ -593,19 +645,25 @@ export default function App() {
         createdDate: getLocalIsoDate(),
       }]);
     }
+    setNotice(wasEditing ? 'Task updated.' : 'Task created.');
     setActiveTask(undefined);
+    restoreModalFocus();
   }
 
   function deleteTask() {
     if (!window.confirm('Delete this task? This cannot be undone.')) return;
     setTasks((current) => current.filter((item) => item.id !== activeTask.id));
+    setNotice('Task deleted.');
     setActiveTask(undefined);
+    restoreModalFocus();
   }
 
   function changeTaskStatus(taskId, status) {
     setTasks((currentTasks) => currentTasks.map((task) => (
       task.id === taskId ? { ...task, status } : task
     )));
+    const stage = STAGES.find((item) => item.id === status);
+    setNotice('Task moved to ' + (stage?.label || 'another stage') + '.');
   }
 
   function handoffTask(taskId, assignee) {
@@ -613,12 +671,43 @@ export default function App() {
     setNotice(`Handed off to ${assignee}.`);
   }
 
-  // TODO M5 crud-modal:
-  //   const [editing, setEditing] = useState(null);
-  //
-  // TODO M11 anchors:
-  //   const [anchors, setAnchors] = useLocalStorage('vibetracker.anchors', [...]);
+  const [anchors, setAnchors] = useLocalStorage('vibetracker.anchors', ANCHOR_SLOTS);
+  const [editingAnchorId, setEditingAnchorId] = useState(null);
+  const [anchorUrlDraft, setAnchorUrlDraft] = useState('');
+  const [anchorError, setAnchorError] = useState('');
 
+  function startEditingAnchor(anchor) {
+    setEditingAnchorId(anchor.id);
+    setAnchorUrlDraft(anchor.url || '');
+    setAnchorError('');
+  }
+
+  function saveAnchor(anchorId) {
+    const url = anchorUrlDraft.trim();
+    if (!isValidHttpUrl(url)) {
+      setAnchorError('Enter a valid http:// or https:// URL.');
+      return;
+    }
+    const currentAnchors = Array.isArray(anchors) ? anchors : ANCHOR_SLOTS;
+    setAnchors(ANCHOR_SLOTS.map((slot) => {
+      const existing = currentAnchors.find((anchor) => anchor.id === slot.id);
+      return { ...slot, url: slot.id === anchorId ? url : (existing?.url || null) };
+    }));
+    setEditingAnchorId(null);
+    setAnchorUrlDraft('');
+    setAnchorError('');
+  }
+
+  function removeAnchor(anchorId) {
+    const currentAnchors = Array.isArray(anchors) ? anchors : ANCHOR_SLOTS;
+    setAnchors(ANCHOR_SLOTS.map((slot) => {
+      const existing = currentAnchors.find((anchor) => anchor.id === slot.id);
+      return { ...slot, url: slot.id === anchorId ? null : (existing?.url || null) };
+    }));
+    setEditingAnchorId(null);
+    setAnchorUrlDraft('');
+    setAnchorError('');
+  }
   return (
     <div className="min-h-screen bg-surface-page p-6 font-sans text-text-primary">
       <header className="mb-6 flex items-end justify-between">
@@ -633,10 +722,60 @@ export default function App() {
         </div>
       </header>
 
-      {/* TODO M11 anchors: render the Anchor Board (Presentation / Demo / Report / Documentation) above the board. */}
+      <section aria-labelledby="anchor-board-heading" className="mb-6">
+        <div className="mb-3 flex items-baseline justify-between">
+          <h2 id="anchor-board-heading" className="font-heading text-base font-semibold text-text-primary">Anchor Board</h2>
+          <p className="text-xs text-text-muted">Project deliverables</p>
+        </div>
+        <div className="grid grid-cols-4 gap-4">
+          {ANCHOR_SLOTS.map((slot) => {
+            const savedAnchor = Array.isArray(anchors) ? anchors.find((anchor) => anchor.id === slot.id) : null;
+            const url = savedAnchor?.url || null;
+            const isEditing = editingAnchorId === slot.id;
+            return (
+              <article key={slot.id} className="rounded-lg border border-[#E2E8F0] bg-surface-card p-4">
+                <h3 className="text-sm font-medium text-text-primary">{slot.label}</h3>
+                {isEditing ? (
+                  <form className="mt-3 space-y-2" onSubmit={(event) => { event.preventDefault(); saveAnchor(slot.id); }}>
+                    <label htmlFor={`anchor-url-${slot.id}`} className="text-xs font-medium text-text-muted">HTTP or HTTPS URL</label>
+                    <input
+                      id={`anchor-url-${slot.id}`}
+                      type="url"
+                      value={anchorUrlDraft}
+                      onChange={(event) => { setAnchorUrlDraft(event.target.value); setAnchorError(''); }}
+                      placeholder="https://�"
+                      aria-invalid={Boolean(anchorError)}
+                      aria-describedby={anchorError ? `anchor-error-${slot.id}` : undefined}
+                      className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-text-primary focus:border-brand-primary focus:outline-none focus:ring-2 focus:ring-brand-primary/20"
+                      autoFocus
+                    />
+                    {anchorError && <p id={`anchor-error-${slot.id}`} role="alert" className="text-xs text-due-overdue">{anchorError}</p>}
+                    <div className="flex gap-2">
+                      <button type="submit" className="rounded-md bg-brand-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-accent focus:outline-none focus:ring-2 focus:ring-brand-primary/30">Save link</button>
+                      <button type="button" onClick={() => { setEditingAnchorId(null); setAnchorError(''); }} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs text-text-primary hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-brand-primary/30">Cancel</button>
+                    </div>
+                  </form>
+                ) : (
+                  <>
+                    {url ? (
+                      <a href={url} target="_blank" rel="noopener noreferrer" className="mt-2 block break-all text-sm text-brand-primary underline hover:text-brand-accent">Open deliverable</a>
+                    ) : (
+                      <p className="mt-2 rounded-md border border-dashed border-[#E2E8F0] px-3 py-4 text-center text-sm text-text-muted">No link added yet.</p>
+                    )}
+                    <div className="mt-3 flex gap-2">
+                      <button type="button" onClick={() => startEditingAnchor({ ...slot, url })} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-text-primary hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-brand-primary/30">{url ? 'Edit link' : 'Add link'}</button>
+                      {url && <button type="button" onClick={() => removeAnchor(slot.id)} className="rounded-md px-2 py-1.5 text-xs font-medium text-due-overdue hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-brand-primary/30">Remove</button>}
+                    </div>
+                  </>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      </section>
 
       <div className="mb-4 flex justify-end">
-        <button type="button" onClick={() => setActiveTask(null)} className="rounded-md bg-brand-primary px-4 py-2 text-sm font-medium text-white hover:bg-brand-accent focus:outline-none focus:ring-2 focus:ring-brand-primary/30">Add task</button>
+        <button ref={addTaskButtonRef} type="button" onClick={() => openTaskModal(null)} className="rounded-md bg-brand-primary px-4 py-2 text-sm font-medium text-white hover:bg-brand-accent focus:outline-none focus:ring-2 focus:ring-brand-primary/30">Add task</button>
       </div>
       {notice && (
         <p role="status" aria-live="polite" className="mb-4 rounded-md border border-emerald-200 bg-white px-3 py-2 text-sm text-due-safe">
@@ -663,7 +802,7 @@ export default function App() {
                   </div>
                 ) : (
                   columnTasks.map((task) => (
-                    <TaskCard key={task.id} task={task} onEdit={setActiveTask} onStatusChange={changeTaskStatus} onHandoff={handoffTask} />
+                    <TaskCard key={task.id} task={task} onEdit={openTaskModal} onStatusChange={changeTaskStatus} onHandoff={handoffTask} />
                   ))
                 )}
               </div>
@@ -675,7 +814,7 @@ export default function App() {
         <TaskModal
           key={activeTask?.id || 'new-task'}
           task={activeTask}
-          onClose={() => setActiveTask(undefined)}
+          onClose={closeTaskModal}
           onSave={saveTask}
           onDelete={deleteTask}
         />

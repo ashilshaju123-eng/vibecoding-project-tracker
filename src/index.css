@@ -12,3 +12,9 @@ body {
   background-color: #f8fafc; /* slate-50 */
   color: #0f172a;            /* slate-900 */
 }
+
+*:focus-visible {
+  outline: 2px solid #0F766E;
+  outline-offset: 2px;
+}
+
