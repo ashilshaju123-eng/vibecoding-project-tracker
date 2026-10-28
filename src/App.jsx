@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { readStoredValue, resolveStorageRetry, writeStoredValue } from './storagePersistence.js';
 
 /**
  * Vibecoding Project Tracker — starter scaffold.
@@ -28,9 +29,17 @@ import { useState, useEffect, useRef } from 'react';
  * @property {string} description
  * @property {'feature'|'bug'} type
  * @property {'todo'|'in-progress'|'review'|'done'} status
- * @property {string} assignee
+ * @property {string} assigneeId
+ * @property {string} assignee Legacy name retained when it cannot be matched safely
+ * @property {string|null} handoffRecipientId
+ * @property {string} handoffNotes
+ * @property {{checks: Array<{label: string, complete: boolean}>, ready: boolean}|null} handoffReadiness
  * @property {string|null} dueDate     ISO 'YYYY-MM-DD'
  * @property {string} createdDate      ISO 'YYYY-MM-DD'
+ * @property {string} contextTool     AI tool used (optional)
+ * @property {string} aiPrompt        AI prompt history (optional)
+ * @property {string} aiResult        AI result or output (optional)
+ * @property {string} context         Additional/legacy AI development context (optional)
  */
 
 // The four columns of the board, in render order.
@@ -49,8 +58,35 @@ const STAGE_BAR = {
   done: 'bg-due-safe',
 };
 
-// Names from PRD §8 — the only valid values for Task.assignee.
-export const TEAM = ['Ashil Shaju'];
+// Stable IDs are stored on tasks; names and roles are resolved for display.
+export const DEMO_USERS = [
+  { id: 'demo-junior', name: 'Maya Patel', email: 'maya.patel@example.edu', role: 'Junior Developer' },
+  { id: 'demo-senior', name: 'Daniel Evans', email: 'daniel.evans@example.edu', role: 'Senior Developer' },
+  { id: 'demo-manager', name: 'Ashil Shaju', email: 'ashil.shaju@example.edu', role: 'Project Manager' },
+];
+
+export const TEAM = DEMO_USERS;
+
+function getUser(userId) {
+  return DEMO_USERS.find((user) => user.id === userId) || null;
+}
+
+function getTaskAssignee(task) {
+  return getUser(task.assigneeId) || (task.assignee
+    ? { id: null, name: task.assignee, role: 'Unmatched legacy assignment' }
+    : null);
+}
+
+function normalizeTask(task) {
+  if (task.assigneeId) return task;
+  const matchedUser = DEMO_USERS.find((user) => user.name === task.assignee);
+  if (matchedUser) return { ...task, assigneeId: matchedUser.id, assignee: '' };
+  return { ...task, assigneeId: '', assignee: task.assignee || '' };
+}
+
+function getTaskReadiness(task) {
+  return task.handoffReadiness || getHandoffReadiness(task);
+}
 
 const ANCHOR_SLOTS = [
   { id: 'presentation', label: 'Presentation', url: null },
@@ -102,7 +138,7 @@ function getDueDatePresentation(task, today = new Date()) {
 function getHandoffReadiness(task) {
   const checks = [
     { label: 'Description added', complete: Boolean(task.description?.trim()) },
-    { label: 'Owner assigned', complete: Boolean(task.assignee?.trim()) },
+    { label: 'Owner assigned', complete: Boolean(task.assigneeId || task.assignee?.trim()) },
     { label: 'AI context or development notes added', complete: Boolean(task.context?.trim()) },
     { label: 'AI tool name added', complete: Boolean(task.contextTool?.trim()) },
   ];
@@ -116,7 +152,7 @@ const SEED_TASKS = [
     description: 'Confirm the locked task schema, stages, and MVP scope before building the board.',
     type: 'feature',
     status: 'done',
-    assignee: 'Ashil Shaju',
+    assigneeId: 'demo-manager',
     dueDate: '2026-10-18',
     createdDate: '2026-10-16',
   },
@@ -126,7 +162,7 @@ const SEED_TASKS = [
     description: 'Show To Do, In Progress, Review and Done with sample cards from localStorage.',
     type: 'feature',
     status: 'in-progress',
-    assignee: 'Ashil Shaju',
+    assigneeId: 'demo-manager',
     dueDate: '2026-10-20',
     createdDate: '2026-10-19',
   },
@@ -136,7 +172,7 @@ const SEED_TASKS = [
     description: 'Check that a stage with no cards still shows the empty-state copy instead of collapsing.',
     type: 'bug',
     status: 'todo',
-    assignee: 'Ashil Shaju',
+    assigneeId: 'demo-manager',
     dueDate: '2026-10-22',
     createdDate: '2026-10-20',
   },
@@ -146,7 +182,7 @@ const SEED_TASKS = [
     description: 'Collect title, description, type, assignee and due date. Modal is milestone M5.',
     type: 'feature',
     status: 'todo',
-    assignee: 'Ashil Shaju',
+    assigneeId: 'demo-manager',
     dueDate: '2026-10-23',
     createdDate: '2026-10-20',
   },
@@ -158,49 +194,172 @@ const SEED_TASKS = [
  * Usage:
  *   const [tasks, setTasks] = useLocalStorage('vibetracker.tasks', []);
  */
-export function useLocalStorage(key, initialValue) {
-  const [value, setValue] = useState(() => {
+export function useLocalStorage(key, initialValue, validateValue = () => true) {
+  const [initialState] = useState(() => {
     try {
-      const raw = window.localStorage.getItem(key);
-      return raw != null ? JSON.parse(raw) : initialValue;
-    } catch {
-      return initialValue;
+      return readStoredValue(window.localStorage, key, initialValue, validateValue);
+    } catch (error) {
+      return { value: initialValue, error, readFailed: true, missing: false };
     }
   });
+  const [value, setValue] = useState(initialState.value);
+  const valueRef = useRef(initialState.value);
+  const [storageError, setStorageError] = useState(initialState.error);
+  const [readFailed, setReadFailed] = useState(initialState.readFailed);
+  const readFailedRef = useRef(initialState.readFailed);
+  const dirtyRef = useRef(false);
+  const missingRef = useRef(initialState.missing);
+
+  function persist(nextValue) {
+    try {
+      const result = writeStoredValue(window.localStorage, key, nextValue);
+      if (!result.saved) throw result.error;
+      setStorageError(null);
+      setReadFailed(false);
+      readFailedRef.current = false;
+      dirtyRef.current = false;
+      return { saved: true };
+    } catch (error) {
+      setStorageError(error);
+      dirtyRef.current = true;
+      return { saved: false, error };
+    }
+  }
+
+  function updateValue(nextValueOrUpdater) {
+    const nextValue = typeof nextValueOrUpdater === 'function'
+      ? nextValueOrUpdater(valueRef.current)
+      : nextValueOrUpdater;
+    valueRef.current = nextValue;
+    setValue(nextValue);
+    if (readFailedRef.current) {
+      dirtyRef.current = true;
+      return { saved: false, error: storageError };
+    }
+    return persist(nextValue);
+  }
+
+  function retryPersistence() {
+    if (readFailedRef.current && !dirtyRef.current) {
+      try {
+        const recovered = readStoredValue(window.localStorage, key, valueRef.current, validateValue);
+        if (recovered.readFailed) throw recovered.error;
+        valueRef.current = recovered.value;
+        setValue(recovered.value);
+        readFailedRef.current = false;
+        setReadFailed(false);
+        if (!recovered.missing) {
+          setStorageError(null);
+          return { saved: true, loaded: true };
+        }
+        return persist(recovered.value);
+      } catch (error) {
+        setStorageError(error);
+        return { saved: false, error };
+      }
+    }
+    if (readFailedRef.current && dirtyRef.current) {
+      let resolution;
+      try {
+        resolution = resolveStorageRetry(
+          window.localStorage,
+          key,
+          validateValue,
+          (message) => window.confirm(message),
+        );
+      } catch (error) {
+        setStorageError(error);
+        return { saved: false, error };
+      }
+      if (resolution.action === 'recover-existing') {
+        valueRef.current = resolution.value;
+        setValue(resolution.value);
+        setStorageError(null);
+        setReadFailed(false);
+        readFailedRef.current = false;
+        dirtyRef.current = false;
+        return { saved: true, recovered: true };
+      }
+      if (resolution.action === 'cancel') {
+        const error = resolution.error || storageError;
+        setStorageError(error);
+        return { saved: false, cancelled: true, error };
+      }
+      readFailedRef.current = false;
+      setReadFailed(false);
+    }
+    return persist(valueRef.current);
+  }
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(key, JSON.stringify(value));
-    } catch {
-      /* quota or private-mode error — silently ignore for hackathon */
-    }
-  }, [key, value]);
+    if (!missingRef.current || readFailedRef.current) return;
+    missingRef.current = false;
+    persist(valueRef.current);
+  }, [key]);
 
-  return [value, setValue];
+  return [value, updateValue, storageError, retryPersistence, readFailed];
+}
+
+function getStorageWarning(key, error, readFailed) {
+  if (!error) return '';
+  const label = key === 'vibetracker.tasks'
+    ? 'Task data'
+    : key === 'vibetracker.anchors'
+      ? 'Project deliverables'
+      : 'Demo user selection';
+  const reason = error instanceof SyntaxError
+    ? 'Saved data is invalid or corrupted.'
+    : error.name === 'QuotaExceededError'
+      ? 'Browser storage is full.'
+      : error.name === 'SecurityError'
+        ? 'The browser blocked access to local storage.'
+        : 'The browser could not access local storage.';
+  return `${label}: ${readFailed ? 'could not be read. Existing data was left untouched. ' : 'could not be saved. '}${reason} Changes may not survive a refresh.`;
+}
+
+function isTaskData(value) {
+  return Array.isArray(value) && value.every((task) => (
+    task && typeof task === 'object' && typeof task.id === 'string'
+    && typeof task.title === 'string' && typeof task.status === 'string'
+  ));
+}
+
+function isAnchorData(value) {
+  return Array.isArray(value) && value.every((anchor) => (
+    anchor && typeof anchor === 'object' && typeof anchor.id === 'string'
+    && typeof anchor.label === 'string'
+  ));
 }
 
 function TaskCard({ task, onStatusChange, onEdit, onHandoff }) {
   const [handoffOpen, setHandoffOpen] = useState(false);
-  const [newOwner, setNewOwner] = useState('');
+  const [newOwnerId, setNewOwnerId] = useState('');
+  const handoffTriggerRef = useRef(null);
+  const assignee = getTaskAssignee(task);
   const isBug = task.type === 'bug';
   const typeStripe = isBug ? 'border-l-type-bug' : 'border-l-type-feature';
   const typeLabelColor = isBug ? 'text-type-bug' : 'text-type-feature';
   const dueDate = getDueDatePresentation(task);
   const deliverableCount = task.deliverables?.length || 0;
-  const handoffReadiness = getHandoffReadiness(task);
+  const handoffReadiness = getTaskReadiness(task);
+
+  function closeHandoff() {
+    setHandoffOpen(false);
+    requestAnimationFrame(() => handoffTriggerRef.current?.focus());
+  }
 
   return (
-    <article className={`rounded-lg border border-l-4 border-[#E2E8F0] ${typeStripe} bg-surface-card p-3 hover:shadow-sm`}>
+    <article className={`min-w-0 rounded-lg border border-l-4 border-[#E2E8F0] ${typeStripe} bg-surface-card p-3 hover:shadow-sm`}>
       <button
         type="button"
         onClick={() => onEdit(task)}
         className="block w-full text-left focus:outline-none focus:ring-2 focus:ring-brand-primary/30"
         aria-label={`Edit ${task.title}`}
       >
-        <h3 className="text-sm font-medium text-text-primary">{task.title}</h3>
-        <p className="mt-1 text-sm font-normal text-text-muted">{task.description}</p>
+        <h3 className="break-words text-sm font-medium text-text-primary [overflow-wrap:anywhere]">{task.title}</h3>
+        <p className="mt-1 break-words text-sm font-normal text-text-muted [overflow-wrap:anywhere]">{task.description}</p>
       </button>
-      <div className="mt-3 flex items-center justify-between gap-2">
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
         <span className={`inline-flex items-center gap-1.5 font-mono text-xs font-medium ${typeLabelColor}`}>
           <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${isBug ? 'bg-type-bug' : 'bg-type-feature'}`} />
           {isBug ? 'Bug' : 'Feature'}
@@ -213,7 +372,6 @@ function TaskCard({ task, onStatusChange, onEdit, onHandoff }) {
         <p className="mt-2 text-xs text-text-muted">{deliverableCount} {deliverableCount === 1 ? 'deliverable link' : 'deliverable links'}</p>
       )}
       <p
-        role="status"
         aria-label={`AI handoff readiness: ${handoffReadiness.ready ? 'Ready' : 'Needs context'}`}
         className={`mt-2 inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium ${handoffReadiness.ready ? 'bg-due-safe/10 text-due-safe' : 'bg-due-warning/10 text-due-warning'}`}
       >
@@ -222,43 +380,43 @@ function TaskCard({ task, onStatusChange, onEdit, onHandoff }) {
       </p>
       <div className="mt-3 flex items-center justify-between gap-2 border-t border-slate-100 pt-2">
         <span className="text-xs text-text-muted">Owner</span>
-        <span className="max-w-[70%] truncate rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-text-primary" title={task.assignee}>
-          {task.assignee || 'Unassigned'}
+        <span className="min-w-0 max-w-[75%] break-words rounded-full bg-slate-100 px-2.5 py-1 text-right text-xs font-medium text-text-primary [overflow-wrap:anywhere]" title={assignee?.name || 'Unassigned'}>
+          {assignee ? `${assignee.name}${assignee.id ? ` · ${assignee.role}` : ' (needs matching)'}` : 'Unassigned'}
         </span>
       </div>
       {handoffOpen ? (
         <form
-          className="mt-2 flex gap-2"
+          className="mt-2 flex flex-wrap gap-2"
           onSubmit={(event) => {
             event.preventDefault();
-            const owner = newOwner.trim();
-            if (!owner || owner === task.assignee) return;
-            onHandoff(task.id, owner);
-            setNewOwner('');
-            setHandoffOpen(false);
+            if (!newOwnerId || newOwnerId === task.assigneeId) return;
+            onHandoff(task.id, newOwnerId);
+            closeHandoff();
           }}
         >
-          <input
+          <select
             autoFocus
             aria-label={`New owner for ${task.title}`}
-            placeholder="Enter name"
-            value={newOwner}
-            onChange={(event) => setNewOwner(event.target.value)}
-            className="min-w-0 flex-1 rounded-md border border-slate-300 px-2 py-1.5 text-xs focus:border-brand-primary focus:outline-none focus:ring-2 focus:ring-brand-primary/20"
-          />
-          <button type="submit" className="rounded-md bg-brand-primary px-2.5 py-1.5 text-xs font-medium text-white hover:bg-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40">Hand off</button>
-          <button type="button" onClick={() => setHandoffOpen(false)} className="rounded-md border border-slate-300 px-2 py-1.5 text-xs text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40">Cancel</button>
+            value={newOwnerId}
+            onChange={(event) => setNewOwnerId(event.target.value)}
+            className="min-h-10 min-w-0 basis-full flex-1 rounded-md border border-slate-300 bg-white px-2 py-2 text-xs focus:border-brand-primary focus:outline-none focus:ring-2 focus:ring-brand-primary/20 sm:basis-0"
+          >
+            <option value="">Select team member</option>
+            {TEAM.map((member) => <option key={member.id} value={member.id}>{member.name} · {member.role}</option>)}
+          </select>
+          <button type="submit" className="min-h-10 rounded-md bg-brand-primary px-3 py-2 text-xs font-medium text-white hover:bg-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40">Hand off</button>
+          <button type="button" onClick={closeHandoff} className="min-h-10 rounded-md border border-slate-300 px-3 py-2 text-xs text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40">Cancel</button>
         </form>
       ) : (
-        <button type="button" onClick={() => setHandoffOpen(true)} className="mt-2 text-xs font-medium text-brand-primary hover:text-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40">
+        <button ref={handoffTriggerRef} type="button" onClick={() => setHandoffOpen(true)} className="mt-2 min-h-10 text-left text-xs font-medium text-brand-primary hover:text-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40">
           Hand off to…
         </button>
       )}
-      <label className="mt-3 flex items-center justify-between gap-2 border-t border-slate-100 pt-2 text-xs text-text-muted">
+      <label className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-2 text-xs text-text-muted">
         <span>Move to</span>
         <select
           aria-label={`Move ${task.title} to another stage`}
-          className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-text-primary focus:border-brand-primary focus:outline-none focus:ring-2 focus:ring-brand-primary/20"
+          className="min-h-10 min-w-0 max-w-full rounded-md border border-slate-200 bg-white px-2 py-2 text-xs text-text-primary focus:border-brand-primary focus:outline-none focus:ring-2 focus:ring-brand-primary/20"
           value={task.status}
           onChange={(event) => onStatusChange(task.id, event.target.value)}
         >
@@ -274,10 +432,16 @@ const EMPTY_FORM = {
   description: '',
   type: 'feature',
   status: 'todo',
-  assignee: TEAM[0],
+  assigneeId: TEAM[0].id,
+  assignee: '',
+  handoffRecipientId: null,
+  handoffNotes: '',
+  handoffReadiness: null,
   dueDate: '',
   context: '',
   contextTool: '',
+  aiPrompt: '',
+  aiResult: '',
   deliverables: [],
 };
 
@@ -312,7 +476,7 @@ function buildTaskPrompt(task) {
     stage,
     '',
     '## Owner',
-    task.assignee?.trim() || 'Not specified',
+    getTaskAssignee(task)?.name || 'Not specified',
     '',
     '## Due Date',
     task.dueDate || 'Not specified',
@@ -320,7 +484,13 @@ function buildTaskPrompt(task) {
     '## AI Tool Used',
     task.contextTool?.trim() || 'Not specified',
     '',
-    '## AI Context and Development Notes',
+    '## AI Prompt(s)',
+    task.aiPrompt?.trim() || 'Not specified',
+    '',
+    '## AI Result / Output',
+    task.aiResult?.trim() || 'Not specified',
+    '',
+    '## Additional AI Context and Development Notes',
     task.context?.trim() || 'Not specified',
   ].join('\n');
 }
@@ -329,15 +499,22 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
   const [form, setForm] = useState(() => task
     ? {
       ...task,
+      assigneeId: task.assigneeId || '',
+      assignee: task.assignee || '',
+      handoffRecipientId: task.handoffRecipientId || null,
+      handoffNotes: task.handoffNotes || '',
       dueDate: task.dueDate || '',
       context: task.context || '',
       contextTool: task.contextTool || '',
+      aiPrompt: task.aiPrompt || '',
+      aiResult: task.aiResult || '',
       deliverables: Array.isArray(task.deliverables) ? task.deliverables : [],
     }
     : EMPTY_FORM);
   const [errors, setErrors] = useState({});
   const [copyFeedback, setCopyFeedback] = useState('');
   const [deliverableErrors, setDeliverableErrors] = useState({});
+  const [validationAttempt, setValidationAttempt] = useState(0);
   const isEditing = Boolean(task);
   const handoffReadiness = getHandoffReadiness(form);
 
@@ -352,26 +529,42 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
       }
       if (event.key !== 'Tab') return;
 
-      const focusable = dialogRef.current?.querySelectorAll(
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const focusable = [...dialog.querySelectorAll(
         'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      );
-      if (!focusable?.length) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (!dialogRef.current.contains(document.activeElement)) {
+      )].filter((element) => (
+        !element.hidden && element.getAttribute('aria-hidden') !== 'true'
+        && element.getClientRects().length > 0
+      ));
+      if (!focusable.length) {
         event.preventDefault();
-        first.focus();
-      } else if (event.shiftKey && document.activeElement === first) {
+        dialog.focus();
+        return;
+      }
+      const currentIndex = focusable.indexOf(document.activeElement);
+      if (currentIndex === -1) {
         event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
+        (event.shiftKey ? focusable.at(-1) : focusable[0]).focus();
+      } else if (event.shiftKey && currentIndex === 0) {
         event.preventDefault();
-        first.focus();
+        focusable.at(-1).focus();
+      } else if (!event.shiftKey && currentIndex === focusable.length - 1) {
+        event.preventDefault();
+        focusable[0].focus();
       }
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onClose]);
+  useEffect(() => {
+    const firstControl = dialogRef.current?.querySelector('input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])');
+    firstControl?.focus();
+  }, []);
+  useEffect(() => {
+    const invalidControl = dialogRef.current?.querySelector('[aria-invalid="true"]');
+    invalidControl?.focus();
+  }, [validationAttempt]);
   function updateField(event) {
     const { name, value } = event.target;
     setForm((current) => ({ ...current, [name]: value }));
@@ -418,24 +611,31 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
     const nextErrors = {};
     if (!form.title.trim()) nextErrors.title = 'Enter a task title.';
     if (!form.description.trim()) nextErrors.description = 'Enter a task description.';
-    if (!form.assignee.trim()) nextErrors.assignee = 'Enter an owner name.';
+    if (!form.assigneeId && !form.assignee.trim()) nextErrors.assigneeId = 'Choose an owner or resolve the unmatched legacy name.';
     setErrors(nextErrors);
     const nextDeliverableErrors = validateDeliverables(form.deliverables);
     setDeliverableErrors(nextDeliverableErrors);
+    setValidationAttempt((attempt) => attempt + 1);
     if (Object.keys(nextErrors).length || Object.keys(nextDeliverableErrors).length) return;
     onSave({
       ...form,
+      assignee: form.assigneeId ? '' : form.assignee,
+      handoffReadiness: getHandoffReadiness(form),
       title: form.title.trim(),
       description: form.description.trim(),
       dueDate: form.dueDate || null,
       context: form.context.trim(),
       contextTool: form.contextTool.trim() || null,
+      aiPrompt: form.aiPrompt.trim(),
+      aiResult: form.aiResult.trim(),
       deliverables: form.deliverables
         .filter((item) => item.label.trim() && item.url.trim())
         .map((item) => ({ label: item.label.trim(), url: item.url.trim() })),
       contextUpdatedAt: (() => {
         const contextChanged = (form.context.trim() !== (task?.context || ''))
-          || ((form.contextTool.trim() || null) !== (task?.contextTool || null));
+          || ((form.contextTool.trim() || null) !== (task?.contextTool || null))
+          || (form.aiPrompt.trim() !== (task?.aiPrompt || ''))
+          || (form.aiResult.trim() !== (task?.aiResult || ''));
         if (contextChanged) return new Date().toISOString();
         return task?.contextUpdatedAt || null;
       })(),
@@ -445,13 +645,13 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
   const fieldClass = 'mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-text-primary focus:border-brand-primary focus:outline-none focus:ring-2 focus:ring-brand-primary/20';
 
   return (
-    <div className="fixed inset-0 z-10 flex items-center justify-center bg-slate-900/50 p-4" onMouseDown={(event) => {
+    <div className="fixed inset-0 z-10 flex items-center justify-center overflow-y-auto bg-slate-900/50 p-2 sm:p-4" onMouseDown={(event) => {
       if (event.target === event.currentTarget) onClose();
     }}>
-      <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="task-modal-title" className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg bg-surface-card p-6">
+      <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="task-modal-title" tabIndex={-1} className="my-auto max-h-[calc(100dvh-1rem)] w-full min-w-0 max-w-md overflow-y-auto rounded-lg bg-surface-card p-4 sm:max-h-[90vh] sm:p-6">
         <div className="mb-5 flex items-center justify-between">
           <h2 id="task-modal-title" className="font-heading text-lg font-semibold text-text-primary">{isEditing ? 'Edit task' : 'Add task'}</h2>
-          <button type="button" onClick={onClose} aria-label="Close dialog" className="rounded px-2 py-1 text-text-muted hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40">×</button>
+          <button type="button" onClick={onClose} aria-label="Close dialog" className="min-h-10 min-w-10 rounded px-2 py-1 text-text-primary hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40">×</button>
         </div>
         <form onSubmit={submit} noValidate className="space-y-4">
           <div>
@@ -464,7 +664,7 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
             <textarea id="task-description" name="description" rows="3" value={form.description} onChange={updateField} className={fieldClass} aria-invalid={Boolean(errors.description)} aria-describedby={errors.description ? 'description-error' : undefined} />
             {errors.description && <p id="description-error" className="mt-1 text-xs text-due-overdue" role="alert">{errors.description}</p>}
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <label className="text-sm font-medium text-text-primary">Type
               <select name="type" value={form.type} onChange={updateField} className={fieldClass}>
                 <option value="feature">Feature</option><option value="bug">Bug</option>
@@ -476,37 +676,75 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
               </select>
             </label>
             <label className="text-sm font-medium text-text-primary">Assignee
-              <input name="assignee" value={form.assignee} onChange={updateField} className={fieldClass} placeholder="Enter owner name" aria-invalid={Boolean(errors.assignee)} />
-              {errors.assignee && <span className="mt-1 block text-xs text-due-overdue" role="alert">{errors.assignee}</span>}
+              <select name="assigneeId" value={form.assigneeId} onChange={updateField} className={fieldClass} aria-invalid={Boolean(errors.assigneeId)} aria-describedby={errors.assigneeId ? 'assignee-error' : undefined}>
+                <option value="">Select team member</option>
+                {TEAM.map((member) => <option key={member.id} value={member.id}>{member.name} · {member.role}</option>)}
+              </select>
+              {form.assignee && !form.assigneeId && <span className="mt-1 block text-xs text-due-warning">Unmatched saved owner: {form.assignee}. Choose the correct team member to resolve it.</span>}
+              {errors.assigneeId && <span id="assignee-error" className="mt-1 block text-xs text-due-overdue" role="alert">{errors.assigneeId}</span>}
             </label>
             <label className="text-sm font-medium text-text-primary">Due date
               <input type="date" name="dueDate" value={form.dueDate} onChange={updateField} className={fieldClass} />
             </label>
           </div>
-          <div>
-            <label htmlFor="task-context" className="text-sm font-medium text-text-primary">AI context and development notes</label>
-            <p className="mt-1 text-xs text-text-muted">Add prompts, decisions, or details that will help continue this task.</p>
-            <textarea
-              id="task-context"
-              name="context"
-              rows="4"
-              value={form.context}
-              onChange={updateField}
-              className={fieldClass}
-              placeholder="What should the next person or AI know?"
-            />
-          </div>
-          <div>
-            <label htmlFor="task-context-tool" className="text-sm font-medium text-text-primary">AI tool used <span className="font-normal text-text-muted">(optional)</span></label>
-            <input
-              id="task-context-tool"
-              name="contextTool"
-              value={form.contextTool}
-              onChange={updateField}
-              className={fieldClass}
-              placeholder="e.g. Cursor, GitHub Copilot, Codex"
-            />
-          </div>
+          <section aria-labelledby="ai-record-heading" className="space-y-4">
+            <div>
+              <h3 id="ai-record-heading" className="text-sm font-semibold text-text-primary">AI Development Record</h3>
+              <p className="mt-1 text-xs text-text-muted">All fields are optional. Record the tool, what you asked, and the result.</p>
+            </div>
+            <div>
+              <label htmlFor="task-context-tool" className="text-sm font-medium text-text-primary">AI Tool Used <span className="font-normal text-text-muted">(optional)</span></label>
+              <input
+                id="task-context-tool"
+                name="contextTool"
+                value={form.contextTool}
+                onChange={updateField}
+                className={fieldClass}
+                placeholder="e.g. ChatGPT, Cursor, Codex, Claude"
+              />
+            </div>
+            <div>
+              <label htmlFor="task-ai-prompt" className="text-sm font-medium text-text-primary">AI Prompt(s) <span className="font-normal text-text-muted">(optional)</span></label>
+              <textarea
+                id="task-ai-prompt"
+                name="aiPrompt"
+                rows="4"
+                value={form.aiPrompt}
+                onChange={updateField}
+                className={fieldClass}
+                placeholder="What did you ask the AI to do? Include follow-up prompts if useful."
+              />
+            </div>
+            <div>
+              <label htmlFor="task-ai-result" className="text-sm font-medium text-text-primary">AI Result / Output <span className="font-normal text-text-muted">(optional)</span></label>
+              <textarea
+                id="task-ai-result"
+                name="aiResult"
+                rows="4"
+                value={form.aiResult}
+                onChange={updateField}
+                className={fieldClass}
+                placeholder="What did the AI produce, and what happened when you used it?"
+              />
+            </div>
+            <div>
+              <label htmlFor="task-context" className="text-sm font-medium text-text-primary">Additional AI context and development notes <span className="font-normal text-text-muted">(optional)</span></label>
+              <p className="mt-1 text-xs text-text-muted">Existing context is retained here alongside the new AI record fields.</p>
+              <textarea
+                id="task-context"
+                name="context"
+                rows="3"
+                value={form.context}
+                onChange={updateField}
+                className={fieldClass}
+                placeholder="Decisions or other details that will help continue this task."
+              />
+            </div>
+            <div>
+              <label htmlFor="handoff-notes" className="text-sm font-medium text-text-primary">Handoff notes <span className="font-normal text-text-muted">(optional)</span></label>
+              <textarea id="handoff-notes" name="handoffNotes" rows="3" value={form.handoffNotes} onChange={updateField} className={fieldClass} placeholder="What should the next owner know?" />
+            </div>
+          </section>
           <section aria-labelledby="handoff-readiness-heading" className="rounded-lg border border-slate-200 bg-slate-50 p-3">
             <div className="flex items-center justify-between gap-2">
               <h3 id="handoff-readiness-heading" className="text-sm font-semibold text-text-primary">Handoff readiness</h3>
@@ -518,7 +756,7 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
               Updates as you edit these fields.
             </p>
             <ul className="mt-2 space-y-1">
-              {handoffReadiness.checks.map((check) => (
+                {handoffReadiness.checks.map((check) => (
                 <li key={check.label} className={`flex items-center gap-2 text-xs ${check.complete ? 'text-due-safe' : 'text-due-warning'}`}>
                   <span aria-hidden="true" className="font-semibold">{check.complete ? '✓' : '!'}</span>
                   <span>{check.label}</span>
@@ -549,27 +787,27 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
                         return remaining;
                       });
                     }}
-                    className="text-xs font-medium text-due-overdue hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40"
+                    className="min-h-10 rounded px-3 py-2 text-xs font-medium text-due-overdue hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40"
                     aria-label={`Remove deliverable link ${index + 1}`}
                   >Remove</button>
                 </div>
                 <label className="mt-2 block text-xs font-medium text-text-primary" htmlFor={`deliverable-label-${index}`}>Label</label>
-                <input id={`deliverable-label-${index}`} value={deliverable.label} onChange={(event) => updateDeliverable(index, 'label', event.target.value)} className={fieldClass} placeholder="e.g. GitHub repository" />
+                <input id={`deliverable-label-${index}`} value={deliverable.label} onChange={(event) => updateDeliverable(index, 'label', event.target.value)} className={fieldClass} placeholder="e.g. GitHub repository" aria-invalid={Boolean(deliverableErrors[index]?.startsWith('Add a short label'))} aria-describedby={deliverableErrors[index]?.startsWith('Add a short label') ? `deliverable-error-${index}` : undefined} />
                 <label className="mt-2 block text-xs font-medium text-text-primary" htmlFor={`deliverable-url-${index}`}>URL</label>
-                <input id={`deliverable-url-${index}`} type="url" value={deliverable.url} onChange={(event) => updateDeliverable(index, 'url', event.target.value)} className={fieldClass} placeholder="https://…" aria-invalid={Boolean(deliverableErrors[index])} />
-                {deliverableErrors[index] && <p role="alert" className="mt-1 text-xs text-due-overdue">{deliverableErrors[index]}</p>}
+                <input id={`deliverable-url-${index}`} type="url" value={deliverable.url} onChange={(event) => updateDeliverable(index, 'url', event.target.value)} className={fieldClass} placeholder="https://…" aria-invalid={Boolean(deliverableErrors[index] && !deliverableErrors[index].startsWith('Add a short label'))} aria-describedby={deliverableErrors[index] && !deliverableErrors[index].startsWith('Add a short label') ? `deliverable-error-${index}` : undefined} />
+                {deliverableErrors[index] && <p id={`deliverable-error-${index}`} role="alert" className="mt-1 text-xs text-due-overdue">{deliverableErrors[index]}</p>}
               </div>
             ))}
             <button
               type="button"
               onClick={() => setForm((current) => ({ ...current, deliverables: [...(current.deliverables || []), { label: '', url: '' }] }))}
-              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-text-primary hover:bg-slate-50"
+              className="min-h-10 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-text-primary hover:bg-slate-50"
             >Add deliverable link</button>
             {(form.deliverables || []).some((item) => item.label.trim() && item.url.trim()) && (
               <div className="space-y-1 rounded-md bg-slate-50 p-3">
                 <p className="text-xs font-medium text-text-muted">Saved links</p>
                 {form.deliverables.filter((item) => item.label.trim() && item.url.trim() && isValidHttpUrl(item.url.trim())).map((item, index) => (
-                  <a key={`${item.url}-${index}`} href={item.url.trim()} target="_blank" rel="noopener noreferrer" className="block break-all text-sm text-brand-primary underline hover:text-brand-accent">
+                  <a key={`${item.url}-${index}`} href={item.url.trim()} target="_blank" rel="noopener noreferrer" className="flex min-h-10 items-center break-all text-sm text-brand-primary underline hover:text-brand-accent">
                     {item.label.trim()}
                   </a>
                 ))}
@@ -581,14 +819,14 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
               <button
                 type="button"
                 onClick={copySavedTaskContext}
-                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-text-primary hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-brand-primary/30"
+                className="min-h-10 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-text-primary hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-brand-primary/30"
               >
                 Copy as Prompt Context
               </button>
               <p className="mt-2 text-xs text-text-muted">Copies saved task values. Save changes before copying to include your edits.</p>
 
               {copyFeedback && (
-                <p role="status" aria-live="polite" className={`mt-2 text-sm ${copyFeedback.startsWith('Copied') ? 'text-due-safe' : 'text-due-overdue'}`}>
+                <p role={copyFeedback.startsWith('Copied') ? 'status' : 'alert'} aria-live={copyFeedback.startsWith('Copied') ? 'polite' : 'assertive'} aria-atomic="true" className={`mt-2 text-sm ${copyFeedback.startsWith('Copied') ? 'text-due-safe' : 'text-due-overdue'}`}>
                   {copyFeedback}
                 </p>
               )}
@@ -597,11 +835,11 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
           <p className="text-xs text-text-muted">* Required fields</p>
           <div className="flex items-center justify-between border-t border-slate-100 pt-4">
             {isEditing ? (
-              <button type="button" onClick={onDelete} className="rounded-md px-3 py-2 text-sm font-medium text-due-overdue hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40">Delete task</button>
+              <button type="button" onClick={onDelete} className="min-h-10 rounded-md px-3 py-2 text-sm font-medium text-due-overdue hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40">Delete task</button>
             ) : <span />}
             <div className="flex gap-2">
-              <button type="button" onClick={onClose} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-text-primary hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40">Cancel</button>
-              <button type="submit" className="rounded-md bg-brand-primary px-3 py-2 text-sm font-medium text-white hover:bg-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40">{isEditing ? 'Save changes' : 'Add task'}</button>
+              <button type="button" onClick={onClose} className="min-h-10 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-text-primary hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40">Cancel</button>
+              <button type="submit" className="min-h-10 rounded-md bg-brand-primary px-3 py-2 text-sm font-medium text-white hover:bg-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40">{isEditing ? 'Save changes' : 'Add task'}</button>
             </div>
           </div>
         </form>
@@ -610,12 +848,97 @@ function TaskModal({ task, onClose, onSave, onDelete }) {
   );
 }
 
+function DemoLogin({ onContinue }) {
+  const [selectedUserId, setSelectedUserId] = useState('');
+
+  function submit(event) {
+    event.preventDefault();
+    if (DEMO_USERS.some((user) => user.id === selectedUserId)) onContinue(selectedUserId);
+  }
+
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-surface-page p-4 sm:p-8">
+      <section aria-labelledby="demo-login-heading" className="w-full min-w-0 max-w-3xl rounded-xl border border-slate-200 bg-surface-card p-4 shadow-sm sm:p-6 lg:p-8">
+        <header className="mb-7">
+          <p className="mb-3 flex items-center gap-2 font-heading text-sm font-semibold text-brand-primary">
+            <span className="inline-block h-2 w-2 bg-brand-primary" aria-hidden="true" />
+            Vibecoding Project Tracker
+          </p>
+          <h1 id="demo-login-heading" className="font-heading text-2xl font-semibold text-text-primary">Choose a demo user</h1>
+          <p className="mt-2 max-w-xl text-sm leading-6 text-text-muted">
+            This is a demonstration login. Choose a sample team member to continue; no password or registration is required. Everyone shares the same project board on this browser.
+          </p>
+        </header>
+        <form onSubmit={submit}>
+          <fieldset>
+            <legend className="mb-3 text-sm font-medium text-text-primary">Select your team role</legend>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              {DEMO_USERS.map((user) => (
+                <label key={user.id} className={`flex cursor-pointer items-start gap-3 rounded-lg border p-4 transition-colors ${selectedUserId === user.id ? 'border-brand-primary bg-brand-primary/5 ring-1 ring-brand-primary' : 'border-slate-200 bg-white hover:border-slate-300'}`}>
+                  <input
+                    type="radio"
+                    name="demo-user"
+                    value={user.id}
+                    checked={selectedUserId === user.id}
+                    onChange={() => setSelectedUserId(user.id)}
+                    className="mt-1 h-4 w-4 shrink-0 accent-brand-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40"
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold text-text-primary">{user.name}</span>
+                    <span className="mt-1 block text-xs font-medium text-brand-primary">{user.role}</span>
+                    <span className="mt-2 block break-all text-xs text-text-muted">{user.email}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <div className="mt-6 flex flex-col-reverse items-stretch gap-3 border-t border-slate-100 pt-5 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs text-text-muted">Demo only. This does not verify identity or protect project data.</p>
+            <button
+              type="submit"
+              disabled={!selectedUserId}
+              className="rounded-md bg-brand-primary px-4 py-2.5 text-sm font-medium text-white hover:bg-brand-accent focus:outline-none focus:ring-2 focus:ring-brand-primary/40 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+            >Continue to Tracker</button>
+          </div>
+        </form>
+      </section>
+    </main>
+  );
+}
 export default function App() {
-  const [tasks, setTasks] = useLocalStorage('vibetracker.tasks', SEED_TASKS);
+  const [storedTasks, setTasks, taskStorageError, retryTasksSave, taskReadFailed] = useLocalStorage('vibetracker.tasks', SEED_TASKS, isTaskData);
+  const tasks = storedTasks.map(normalizeTask);
+  useEffect(() => {
+    if (taskStorageError) return;
+    const needsMigration = storedTasks.some((task) => (
+      (!task.assigneeId && DEMO_USERS.some((user) => user.name === task.assignee))
+      || !task.handoffReadiness
+      || typeof task.handoffNotes !== 'string'
+      || !('handoffRecipientId' in task)
+    ));
+    if (needsMigration) {
+      setTasks(storedTasks.map((task) => {
+        const normalizedTask = normalizeTask(task);
+        return {
+          ...normalizedTask,
+          handoffRecipientId: normalizedTask.handoffRecipientId || null,
+          handoffNotes: normalizedTask.handoffNotes || '',
+          handoffReadiness: normalizedTask.handoffReadiness || getHandoffReadiness(normalizedTask),
+        };
+      }));
+    }
+  }, [storedTasks, setTasks, taskStorageError]);
+  const [sessionUserId, setSessionUserId, sessionStorageError, retrySessionSave, sessionReadFailed] = useLocalStorage('vibetracker.currentUserId', null, (value) => value === null || typeof value === 'string');
   const [activeTask, setActiveTask] = useState(undefined);
   const [notice, setNotice] = useState('');
   const modalTriggerRef = useRef(null);
   const addTaskButtonRef = useRef(null);
+  const backgroundRef = useRef(null);
+  const anchorTriggerRefs = useRef({});
+
+  useLayoutEffect(() => {
+    if (backgroundRef.current) backgroundRef.current.inert = activeTask !== undefined;
+  }, [activeTask]);
 
   function restoreModalFocus() {
     requestAnimationFrame(() => {
@@ -636,45 +959,101 @@ export default function App() {
 
   function saveTask(form) {
     const wasEditing = Boolean(activeTask);
+    let result;
     if (wasEditing) {
-      setTasks((current) => current.map((item) => item.id === activeTask.id ? { ...item, ...form } : item));
+      result = setTasks((current) => current.map((item) => item.id === activeTask.id ? { ...item, ...form } : item));
     } else {
-      setTasks((current) => [...current, {
+      result = setTasks((current) => [...current, {
         ...form,
+        assignee: '',
+        handoffRecipientId: null,
+        handoffReadiness: getHandoffReadiness(form),
         id: globalThis.crypto?.randomUUID?.() || `task-${Date.now()}`,
         createdDate: getLocalIsoDate(),
       }]);
     }
-    setNotice(wasEditing ? 'Task updated.' : 'Task created.');
+    setNotice(result.saved
+      ? (wasEditing ? 'Task updated.' : 'Task created.')
+      : 'Task change is only in this session and may not survive a refresh.');
     setActiveTask(undefined);
     restoreModalFocus();
   }
 
   function deleteTask() {
     if (!window.confirm('Delete this task? This cannot be undone.')) return;
-    setTasks((current) => current.filter((item) => item.id !== activeTask.id));
-    setNotice('Task deleted.');
+    const result = setTasks((current) => current.filter((item) => item.id !== activeTask.id));
+    setNotice(result.saved ? 'Task deleted.' : 'Task removal is only in this session and may not survive a refresh.');
     setActiveTask(undefined);
     restoreModalFocus();
   }
 
   function changeTaskStatus(taskId, status) {
-    setTasks((currentTasks) => currentTasks.map((task) => (
+    const result = setTasks((currentTasks) => currentTasks.map((task) => (
       task.id === taskId ? { ...task, status } : task
     )));
     const stage = STAGES.find((item) => item.id === status);
-    setNotice('Task moved to ' + (stage?.label || 'another stage') + '.');
+    setNotice(result.saved
+      ? 'Task moved to ' + (stage?.label || 'another stage') + '.'
+      : 'Task move is only in this session and may not survive a refresh.');
   }
 
-  function handoffTask(taskId, assignee) {
-    setTasks((current) => current.map((task) => task.id === taskId ? { ...task, assignee } : task));
-    setNotice(`Handed off to ${assignee}.`);
+  function handoffTask(taskId, recipientId) {
+    const recipient = getUser(recipientId);
+    if (!recipient) return;
+    const result = setTasks((current) => current.map((rawTask) => {
+      const task = normalizeTask(rawTask);
+      if (task.id !== taskId) return task;
+      return {
+        ...task,
+        assigneeId: recipient.id,
+        assignee: '',
+        handoffRecipientId: recipient.id,
+        handoffReadiness: getHandoffReadiness(task),
+      };
+    }));
+    setNotice(result.saved
+      ? `Handed off to ${recipient.name}.`
+      : `Handoff to ${recipient.name} is only in this session and may not survive a refresh.`);
   }
 
-  const [anchors, setAnchors] = useLocalStorage('vibetracker.anchors', ANCHOR_SLOTS);
+  const [anchors, setAnchors, anchorStorageError, retryAnchorsSave, anchorReadFailed] = useLocalStorage('vibetracker.anchors', ANCHOR_SLOTS, isAnchorData);
   const [editingAnchorId, setEditingAnchorId] = useState(null);
   const [anchorUrlDraft, setAnchorUrlDraft] = useState('');
   const [anchorError, setAnchorError] = useState('');
+
+  const currentUser = DEMO_USERS.find((user) => user.id === sessionUserId);
+
+  const storageWarnings = [
+    { key: 'vibetracker.tasks', error: taskStorageError, readFailed: taskReadFailed, retry: retryTasksSave },
+    { key: 'vibetracker.anchors', error: anchorStorageError, readFailed: anchorReadFailed, retry: retryAnchorsSave },
+    { key: 'vibetracker.currentUserId', error: sessionStorageError, readFailed: sessionReadFailed, retry: retrySessionSave },
+  ].filter((item) => item.error);
+  const noticeIsError = notice.includes('only in this session') || notice.includes('may not survive a refresh');
+
+  function renderStorageWarnings() {
+    if (!storageWarnings.length) return null;
+    return (
+      <section aria-label="Storage warnings" className="mb-4 space-y-2">
+        {storageWarnings.map(({ key, error, readFailed, retry }) => (
+          <div key={key} role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+            <p>{getStorageWarning(key, error, readFailed)}</p>
+            <button type="button" onClick={() => {
+              const result = retry();
+              if (result.saved) {
+                setNotice(result.recovered || result.loaded
+                  ? 'Saved browser data recovered.'
+                  : 'Current session changes saved to browser storage.');
+              }
+            }} className="shrink-0 rounded-md border border-amber-700 bg-white px-3 py-1.5 text-xs font-semibold text-amber-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/50">Retry storage</button>
+          </div>
+        ))}
+      </section>
+    );
+  }
+
+  if (!currentUser) {
+    return <><DemoLogin onContinue={setSessionUserId} />{renderStorageWarnings()}</>;
+  }
 
   function startEditingAnchor(anchor) {
     setEditingAnchorId(anchor.id);
@@ -696,6 +1075,7 @@ export default function App() {
     setEditingAnchorId(null);
     setAnchorUrlDraft('');
     setAnchorError('');
+    requestAnimationFrame(() => anchorTriggerRefs.current[anchorId]?.focus());
   }
 
   function removeAnchor(anchorId) {
@@ -707,19 +1087,29 @@ export default function App() {
     setEditingAnchorId(null);
     setAnchorUrlDraft('');
     setAnchorError('');
+    requestAnimationFrame(() => anchorTriggerRefs.current[anchorId]?.focus());
   }
   return (
-    <div className="min-h-screen bg-surface-page p-6 font-sans text-text-primary">
-      <header className="mb-6 flex items-end justify-between">
+    <div className="min-h-screen min-w-0 overflow-x-hidden bg-surface-page p-3 font-sans text-text-primary sm:p-5 lg:p-6">
+      <div ref={backgroundRef} aria-hidden={activeTask !== undefined}>
+      {renderStorageWarnings()}
+      <header className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="flex items-center gap-2 font-heading text-2xl font-semibold text-text-primary">
             <span className="inline-block h-2 w-2 bg-brand-primary" aria-hidden="true" />
             Vibecoding Project Tracker
           </h1>
-          <p className="mt-1 text-sm text-text-muted">
-            Ashil Shaju
-          </p>
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-text-muted">
+            <span>{currentUser.name}</span>
+            <span aria-hidden="true">·</span>
+            <span>{currentUser.role}</span>
+          </div>
         </div>
+        <button
+          type="button"
+          onClick={() => setSessionUserId(null)}
+          className="min-h-10 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-text-primary hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-brand-primary/40 focus:ring-offset-2"
+        >Switch User</button>
       </header>
 
       <section aria-labelledby="anchor-board-heading" className="mb-6">
@@ -727,7 +1117,7 @@ export default function App() {
           <h2 id="anchor-board-heading" className="font-heading text-base font-semibold text-text-primary">Anchor Board</h2>
           <p className="text-xs text-text-muted">Project deliverables</p>
         </div>
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4">
           {ANCHOR_SLOTS.map((slot) => {
             const savedAnchor = Array.isArray(anchors) ? anchors.find((anchor) => anchor.id === slot.id) : null;
             const url = savedAnchor?.url || null;
@@ -743,7 +1133,7 @@ export default function App() {
                       type="url"
                       value={anchorUrlDraft}
                       onChange={(event) => { setAnchorUrlDraft(event.target.value); setAnchorError(''); }}
-                      placeholder="https://�"
+                      placeholder="https://…"
                       aria-invalid={Boolean(anchorError)}
                       aria-describedby={anchorError ? `anchor-error-${slot.id}` : undefined}
                       className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-text-primary focus:border-brand-primary focus:outline-none focus:ring-2 focus:ring-brand-primary/20"
@@ -751,20 +1141,20 @@ export default function App() {
                     />
                     {anchorError && <p id={`anchor-error-${slot.id}`} role="alert" className="text-xs text-due-overdue">{anchorError}</p>}
                     <div className="flex gap-2">
-                      <button type="submit" className="rounded-md bg-brand-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-accent focus:outline-none focus:ring-2 focus:ring-brand-primary/30">Save link</button>
-                      <button type="button" onClick={() => { setEditingAnchorId(null); setAnchorError(''); }} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs text-text-primary hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-brand-primary/30">Cancel</button>
+                      <button type="submit" className="min-h-10 rounded-md bg-brand-primary px-3 py-2 text-xs font-medium text-white hover:bg-brand-accent focus:outline-none focus:ring-2 focus:ring-brand-primary/30">Save link</button>
+                      <button type="button" onClick={() => { setEditingAnchorId(null); setAnchorError(''); requestAnimationFrame(() => anchorTriggerRefs.current[slot.id]?.focus()); }} className="min-h-10 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs text-text-primary hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-brand-primary/30">Cancel</button>
                     </div>
                   </form>
                 ) : (
                   <>
                     {url ? (
-                      <a href={url} target="_blank" rel="noopener noreferrer" className="mt-2 block break-all text-sm text-brand-primary underline hover:text-brand-accent">Open deliverable</a>
+                      <a href={url} target="_blank" rel="noopener noreferrer" className="mt-2 flex min-h-10 items-center break-all text-sm text-brand-primary underline hover:text-brand-accent">Open deliverable</a>
                     ) : (
                       <p className="mt-2 rounded-md border border-dashed border-[#E2E8F0] px-3 py-4 text-center text-sm text-text-muted">No link added yet.</p>
                     )}
                     <div className="mt-3 flex gap-2">
-                      <button type="button" onClick={() => startEditingAnchor({ ...slot, url })} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-text-primary hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-brand-primary/30">{url ? 'Edit link' : 'Add link'}</button>
-                      {url && <button type="button" onClick={() => removeAnchor(slot.id)} className="rounded-md px-2 py-1.5 text-xs font-medium text-due-overdue hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-brand-primary/30">Remove</button>}
+                      <button ref={(element) => { anchorTriggerRefs.current[slot.id] = element; }} type="button" onClick={() => startEditingAnchor({ ...slot, url })} className="min-h-10 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-text-primary hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-brand-primary/30">{url ? 'Edit link' : 'Add link'}</button>
+                      {url && <button type="button" onClick={() => removeAnchor(slot.id)} className="min-h-10 rounded-md px-3 py-2 text-xs font-medium text-due-overdue hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-brand-primary/30">Remove</button>}
                     </div>
                   </>
                 )}
@@ -775,14 +1165,14 @@ export default function App() {
       </section>
 
       <div className="mb-4 flex justify-end">
-        <button ref={addTaskButtonRef} type="button" onClick={() => openTaskModal(null)} className="rounded-md bg-brand-primary px-4 py-2 text-sm font-medium text-white hover:bg-brand-accent focus:outline-none focus:ring-2 focus:ring-brand-primary/30">Add task</button>
+        <button ref={addTaskButtonRef} type="button" onClick={() => openTaskModal(null)} className="min-h-11 w-full rounded-md bg-brand-primary px-4 py-2 text-sm font-medium text-white hover:bg-brand-accent focus:outline-none focus:ring-2 focus:ring-brand-primary/30 sm:w-auto">Add task</button>
       </div>
       {notice && (
-        <p role="status" aria-live="polite" className="mb-4 rounded-md border border-emerald-200 bg-white px-3 py-2 text-sm text-due-safe">
+        <p role={noticeIsError ? 'alert' : 'status'} aria-live={noticeIsError ? 'assertive' : 'polite'} aria-atomic="true" className={`mb-4 rounded-md border bg-white px-3 py-2 text-sm ${noticeIsError ? 'border-red-200 text-due-overdue' : 'border-emerald-200 text-due-safe'}`}>
           {notice}
         </p>
       )}
-      <main className="grid grid-cols-4 gap-4">
+      <main className="grid min-w-0 grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
         {STAGES.map((stage) => {
           const columnTasks = tasks.filter((task) => task.status === stage.id);
 
@@ -810,6 +1200,7 @@ export default function App() {
           );
         })}
       </main>
+      </div>
       {activeTask !== undefined && (
         <TaskModal
           key={activeTask?.id || 'new-task'}

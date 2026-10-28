@@ -10,7 +10,7 @@ export default {
 
         brand: {
           primary: '#0F766E',
-          accent: '#0D9488',
+          accent: '#0F5F59',
         },
         surface: {
           page: '#F4F6F8',
@@ -18,17 +18,17 @@ export default {
         },
         text: {
           primary: '#0F172A',
-          muted: '#64748B',
+          muted: '#596579',
         },
         type: {
           feature: '#4F46E5',
           bug: '#C026D3',
         },
         due: {
-          safe: '#059669',
-          warning: '#D97706',
+          safe: '#065F46',
+          warning: '#92400E',
           overdue: '#B91C1C',
-          neutral: '#64748B',
+          neutral: '#526174',
         },
       },
       fontFamily: {

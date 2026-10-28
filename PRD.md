@@ -1,213 +1,177 @@
-# Vibecoding Project Tracker — PRD
+# Vibecoding Project Tracker — Product Requirements
 
-**Status:** Hackathon starter PRD · review and fill in the **`<TODO>`** sections before you tag `prd-done`.
+**Document status:** Assessment-aligned description of the current prototype
+**Updated:** 28 October 2026
 
----
+## 1. Problem and users
 
-## 1. Problem
+Vibecoding teams need a lightweight way to see task progress and retain the AI prompts, outputs and development notes that produced a task. General-purpose project tools can be unnecessarily complex for a small course project, while informal notes make it difficult to continue work or hand it to a teammate.
 
-Vibecoding teams have two recurring pains with large projects:
+- **Primary users:** the student team building and demonstrating this prototype.
+- **Secondary users:** future students working on similar coursework.
 
-1. **They lose track of tasks.** Three teammates, a hundred small things, no shared view. Nothing tells them what state each task is actually in.
-2. **They lose track of prompts.** The AI gave them working code two days ago but no one remembers the prompt that produced it. When they need to iterate, they start from scratch.
+## 2. Product scope
 
-A spreadsheet doesn't solve this. A real project tool (Linear, Jira, Notion) is overkill, doesn't know about prompts, and takes hours to set up.
+The prototype is a single-project React web application with two main surfaces:
 
-## 2. Target users
+- A four-column Kanban board with To Do, In Progress, Review and Done statuses.
+- An Anchor Board with fixed Presentation, Demo, Report and Documentation slots.
 
-- **Primary:** the team members, for the remaining weeks of the summer semester.
-- **Secondary:** future cohorts of vibecoders taking the same class.
+Tasks can include an owner, dates, category, AI development record, handoff information and labelled deliverable URLs. Users can copy a Markdown task briefing to continue work in an AI chat.
 
-We are designing the tool we ourselves will use. The pitch demo is also our first real user test.
+This is a **single-project prototype**, not a real authenticated multi-user service. Login is a choice among predefined demo users. The selected user ID, tasks and project links are stored in that browser's localStorage. All demo users using the same browser and origin see the same board. There is no account verification, server, shared database or cross-device synchronization.
 
-## 3. Product overview
+## 3. Main user flows
 
-A single-page web app with two persistent surfaces:
+1. Select a predefined demo user on the demonstration login screen. No password or registration is requested.
+2. View tasks in the four status columns. Add a task or open a card to edit its information.
+3. Move a task with its status selector, assign an owner, or hand it off to a team member.
+4. Record the AI tool, prompt history, output and additional development context separately.
+5. Add labelled task links and use **Copy as Prompt Context** to copy the saved task briefing. Unsaved edits are not included in the copy.
+6. Add or update links in the four project-level Anchor Board slots.
 
-- A **Kanban board** where vibecoding tasks move through four states.
-- An **Anchor Board** above it that pins the four final-project deliverables (Presentation, Demo, Report, Documentation).
+## 4. Data model
 
-Each task carries the prompt context that produced it, so any teammate can click a button and copy the task + prompt history back into an AI chat to continue work.
-
-## 4. Primary user flow
-
-1. Open the Webapp. The board loads from local storage.
-2. Click "+" to add a task. Fill in title, type, assignee, due date, prompt context.
-3. Move the task across columns as you work.
-4. When stuck, click "Copy as Prompt Context" on a task and paste it into Claude/ChatGPT/Cursor to continue.
-5. Hand off a task to a teammate with one dropdown.
-6. Drop final deliverable links into the Anchor Board as you produce them.
-
-## 5. Data model
-
-Locked. Do not change without team agreement.
+The implementation stores JSON in three localStorage keys: `vibetracker.tasks`, `vibetracker.anchors` and `vibetracker.currentUserId`.
 
 ```js
-// A single vibecoding task.
-Task = {
-  id: string,                    // uuid or timestamp string
-  title: string,
-  description: string,
-  type: 'feature' | 'bug',       // visual color coding
-  status: 'todo' | 'in-progress' | 'review' | 'done',
-  assignee: string,              // one of the three teammate names from §8
-  dueDate: string | null,        // ISO date 'YYYY-MM-DD'
-  createdDate: string,           // ISO date 'YYYY-MM-DD'
-
-  // Added in later milestones:
-  context: string,               // M9 context — curated briefing for the next AI / teammate
-  contextTool: string | null,    // M9 context — 'Claude' | 'ChatGPT' | 'Cursor' | 'Lovable' | 'Replit' | 'Other'
-  contextUpdatedAt: string|null, // M9 context — ISO timestamp set automatically on save
+User = {
+  id: string,       // stable predefined demo ID
+  name: string,
+  email: string,
+  role: string,
 }
 
-// One of four pinned deliverable slots.
+Task = {
+  id: string,
+  title: string,
+  description: string,
+  type: 'feature' | 'bug',
+  status: 'todo' | 'in-progress' | 'review' | 'done',
+  assigneeId: string,                 // ID from the predefined demo-user list
+  assignee?: string,                  // legacy name retained only if it cannot be matched
+  dueDate: string | null,             // ISO calendar date, YYYY-MM-DD
+  createdDate: string,                // ISO calendar date, YYYY-MM-DD
+  contextTool: string | null,
+  aiPrompt: string,
+  aiResult: string,
+  context: string,                    // additional development notes/context
+  contextUpdatedAt: string | null,    // ISO timestamp updated when AI context changes
+  handoffRecipientId: string | null,  // most recent handoff recipient
+  handoffNotes: string,
+  handoffReadiness: {
+    checks: Array<{ label: string, complete: boolean }>,
+    ready: boolean,
+  } | null,
+  deliverables: Array<{ label: string, url: string }>,
+}
+
 Anchor = {
   id: 'presentation' | 'demo' | 'report' | 'documentation',
-  label: string,                 // human-readable
-  url: string | null,            // the link the team pastes in
+  label: string,
+  url: string | null,
 }
 ```
 
-## 6. Tech stack
+The predefined users are Maya Patel (`demo-junior`, Junior Developer), Daniel Evans (`demo-senior`, Senior Developer) and Ashil Shaju (`demo-manager`, Project Manager). Their example.edu addresses are included in the demo-user records and shown on the login screen. `assigneeId` and `handoffRecipientId` reference these IDs; names and roles are looked up for display.
 
-| Layer | Choice | Why |
+When older tasks contain a name in `assignee`, exact matches are migrated to the matching stable ID. An unmatched legacy name is retained and shown for the user to resolve; it is not guessed. A handoff updates the current `assigneeId` and records the same person as `handoffRecipientId`. The app records the latest recipient, not a handoff history.
+
+Handoff readiness is derived from four checks: description added, owner assigned, AI context/development notes added, and AI tool name added. The current readiness result and its checks are stored with the task. Prompt/result fields, handoff notes and deliverable URLs are not readiness checks.
+
+## 5. Technology and persistence decisions
+
+| Area | Implementation |
+|---|---|
+| UI | React 18 with Vite |
+| Styling | Tailwind CSS 3 and the tokens in `tailwind.config.js` |
+| State | React state and a small `useLocalStorage` hook in `src/App.jsx` |
+| Storage helpers | `src/storagePersistence.js`; tests use Node's built-in test runner |
+| Persistence | Browser localStorage; no backend or external storage service |
+| Entry point | `src/main.jsx` renders the single `App` component |
+
+The hook detects storage access, parsing/validation, serialization and write errors. It keeps changes in memory when a write fails, warns that they may not survive refresh, and offers a retry. Failed initial reads and invalid saved JSON are not automatically replaced with defaults. If retry would replace data that remains unreadable or invalid, the user must confirm; readable saved data can be recovered instead.
+
+localStorage is scoped to a browser profile and origin. Clearing browser data, using another device/profile, private browsing restrictions, or persistent storage failures can prevent recovery or sharing. This persistence choice intentionally supports the course prototype, not collaboration across devices.
+
+## 6. Statuses and team
+
+The four status IDs and display labels are:
+
+| ID | Label |
+|---|---|
+| `todo` | To Do |
+| `in-progress` | In Progress |
+| `review` | Review |
+| `done` | Done |
+
+Team identity is represented by the predefined demo-user records in `src/App.jsx`. The login is simulated and does not authenticate or authorize users.
+
+## 7. Assessment requirements
+
+The IDs, descriptions and MVP classifications below are the authoritative assessment mapping.
+
+### Functional requirements
+
+| ID | Requirement | Scope |
 |---|---|---|
-| Framework | React (via Vite) | What the scaffold ships with. Don't migrate. |
-| Styling | Tailwind | Already configured. Use utility classes; no separate CSS files. |
-| State | React `useState` + a `useLocalStorage` hook | Simple, no library needed. |
-| Persistence | **localStorage** | Zero infra. Pick this. Do not switch to a backend mid-hackathon. |
-| Deploy | Vercel | One-click deploy from GitHub. |
+| FR1 | Four-column Kanban board | MVP |
+| FR2 | Create, view, edit and delete tasks | MVP |
+| FR3 | Move tasks between statuses | MVP |
+| FR4 | Simulated login with predefined users | MVP |
+| FR5 | Assign tasks to team members | MVP |
+| FR6 | Record AI tools, prompts and results | MVP |
+| FR7 | Preserve task data across refreshes | MVP |
+| FR8 | Deadlines and due-date indicators | Non-MVP |
+| FR9 | Feature/Bug categories | Non-MVP |
+| FR10 | Task deliverable links | Non-MVP |
+| FR11 | Handoff notes and readiness indicators | Non-MVP |
+| FR12 | Copy saved task context | Non-MVP |
+| FR13 | Project-level deliverable links | Non-MVP |
 
-> **Decision:** localStorage, not a shared backend. If you want a shared backend later, that's M14 — out of scope for the hackathon.
+### Non-functional requirements
 
-## 7. Stage names
+| ID | Requirement | Scope |
+|---|---|---|
+| NFR1 | Accessibility | MVP |
+| NFR2 | Usability | MVP |
+| NFR3 | Performance | MVP |
+| NFR4 | Reliability | MVP |
+| NFR5 | Browser compatibility | MVP |
+| NFR6 | Responsive design | MVP |
+| NFR7 | Data privacy | MVP |
+| NFR8 | Visual consistency | Non-MVP |
+| NFR9 | Maintainability | Non-MVP |
+| NFR10 | Error prevention and feedback | MVP |
 
-Four columns, in this order, with these exact labels in the UI:
+### Data requirements
 
-1. **To Do**
-2. **In Progress**
-3. **Review**
-4. **Done**
+| ID | Requirement | Scope |
+|---|---|---|
+| DR1 | User ID, name and email | MVP |
+| DR2 | Task ID, title and description | MVP |
+| DR3 | Task status | MVP |
+| DR4 | Assigned user ID | MVP |
+| DR5 | AI tool, prompts and results | MVP |
+| DR6 | Creation dates and deadlines | Non-MVP |
+| DR7 | Feature/Bug category | Non-MVP |
+| DR8 | Handoff notes, recipient and readiness | Non-MVP |
+| DR9 | Task deliverable labels and URLs | Non-MVP |
+| DR10 | Project deliverable labels and URLs | Non-MVP |
 
-## 8. Team
+## 8. Implementation notes and limits
 
-Fill these in before tagging `prd-done`:
+- The task board, task CRUD, stage changes, demo-user selection, assignments, AI records, task links, project links, due-date indicators and context copy are implemented in `src/App.jsx`.
+- Current breakpoint behavior uses a single-column board on phones, two columns on medium screens and four columns at large screens. Anchor cards use one, two and four columns at the corresponding small/large breakpoints.
+- Accessibility improvements include labelled controls, validation associations, visible focus, a keyboard-trapped task dialog, inert/hidden background content while it is open, focus restoration, and status/alert announcements. Manual keyboard checks have been reported. These checks do not establish full WCAG 2.2 AA conformance.
+- NFR3 targets common actions completing in under one second. Local state changes are synchronous, but no measured performance benchmark is recorded; measure on representative devices if timing evidence is required.
+- NFR5 should be backed by a recorded Chrome, Edge and Firefox test matrix; a successful Vite build alone does not establish browser compatibility.
+- The main UI and domain logic remain concentrated in `src/App.jsx`; storage helper logic is separated, but maintainability is still limited by the size of the main component.
+- **Copy as Prompt Context** includes title, description, type, status, owner, deadline, AI tool, prompts, result and additional context. It does not currently serialize handoff notes, handoff recipient/readiness or task deliverable URLs.
+- There is no backend, account security, per-user board, multi-project support or real-time collaboration.
 
-| Slot | Name          | GitHub handle |
-|---|---------------|---|
-| Teammate A | `Ashil Shaju` | `ashilshaju123-eng` |
-| Teammate B | `<TODO>`      | `<TODO>` |
-| Teammate C | `<TODO>`      | `<TODO>` |
+## 9. Design and project context
 
-These three names become the **only** allowed values for `Task.assignee`. No auth — just a dropdown.
+The visual direction remains a calm studio board: light surfaces, strong typography and restrained color for task type, deadlines and status. `DESIGN.md` records the palette, responsive behavior, keyboard/accessibility treatment and component guidance.
 
-## 9. Milestone ownership
-
-Fill in the owner column. Recommended default in **bold**; change if your team has different strengths.
-
-| # | Tag | Title | Suggested owner | Final owner |
-|---|---|---|---|---|
-| 3 | `design-done` | Design system + voice (DESIGN.md) | **B** | `<TODO>` |
-| 4 | `data-model` | Task model + board view | **A** | `<TODO>` |
-| 5 | `crud-modal` | Add / edit / delete modal | **A** | `<TODO>` |
-| 6 | `tag-style` | Feature / bug colors | **B** | `<TODO>` |
-| 7 | `task-owner` | Owner indicator + handoff | **A** | `<TODO>` |
-| 8 | `due-tint` | Due-date color tinting | **B** | `<TODO>` |
-| 9 | `context` | Context field on the task modal | **C** | `<TODO>` |
-| 10 | `copy-prompt` | "Copy as Prompt Context" button | **C** | `<TODO>` |
-| 11 | `anchors` | Deliverable Anchor Board | **B** | `<TODO>` |
-| 12 | `secret-sauce` | The one thing that makes it yours | **C / All** | `<TODO>` |
-| 13 | `pitch-ready` | Demo + pitch rehearsal | **All** | `<TODO>` |
-
-
-Track A owns the state model and task ownership. Track B owns the visuals (and design — M3 runs parallel to M2 so the team starts Phase 3 with the palette already chosen). Track C owns the differentiator features (M9 + M10 — the context field and the Copy-as-Prompt button) and usually leads on M12 secret-sauce. Put your strongest prompter on Track C.
-
-**Dependency note.** M3 (`design-done`) runs **in parallel with M2** — Person B drafts DESIGN.md and pastes the colors into `tailwind.config.js` while the rest of the team reviews the PRD. M6 / M7 / M8 / M11 all depend on M4 + M5 being done first. While Person A builds M4+M5 (first ~60 min of Phase 3), Person C should draft the Markdown template for the "Copy as Prompt Context" output (M10). M12 `secret-sauce` is open-ended — pick whatever makes the tracker uniquely yours; constraint is "must be visible in the demo and must not break anything else."
-
-## 10. AI / vibe coding angle
-
-Where AI will be heavily used:
-- M4, M5: scaffold the board and the modal from a single prompt each.
-- M9, M10: write the Markdown serialization helper for the Context field.
-- M7: animation polish for the handoff toast.
-
-Where AI will **not** save you time:
-- M2 (this PRD review) — read it yourself.
-- M3 (DESIGN.md) — design taste is yours, not the model's.
-- M12 (secret-sauce) — the whole point is that AI can't predict it.
-- M13 (pitch) — write the script in your own voice.
-
-Keep the Context field of each real task up to date as you work. By the end of the hackathon you should have a handful of curated context blocks — those become part of your Module 5 "Vibe Coding History" deliverable.
-
-## 11. Team identity
-
-Fill in:
-
-- **Team name:** `Ashil Shaju`
-- **Tagline (one sentence):** `<TODO>`
-- **Tracker URL after deploy:** `<TODO>` (Vercel will give it to you)
-
-## 12. Out of scope (do not build)
-
-- Authentication / accounts.
-- Real GitHub integration.
-- A real backend / shared database.
-- Mobile responsive — desktop only is fine.
-- Multi-team support.
-- Real-time collaboration.
-
-## 13. Definition of done
-
-The hackathon is "done" when all 13 milestone tags are pushed to your repo and visible on the dashboard. The pitch is "done" when:
-
-- The board loads on Vercel without errors.
-- The "Copy as Prompt Context" demo works on stage.
-- 5 min pitch is rehearsed.
-
----
-
-
-
-## 14. Functional Requirements
-
-IDs use the prefix `FR`.
-
-| ID | Requirement | Justification | MVP (Yes/No) |
-| --- | --- | --- | --- |
-| FR-01 | Display a four-column Kanban board | Track the progress of each milestone or issue, let people see what stage work has reached and identify anything needing review | Yes |
-| FR-02 | Create new tasks | Record work as it comes up so that important jobs aren't forgotten | Yes |
-| FR-03 | Edit and delete tasks | Allow changes when requirements change or when a task is no longer needed | Yes |
-| FR-04 | Move tasks between stages | Keep the board accurate as development progresses | Yes |
-| FR-05 | Assign tasks and support handoffs | Make it clear who is responsible for a task, even though you're building the prototype individually | No |
-| FR-06 | Record AI context, prompts and tools used | Keep track of which AI tool was used, what was asked and the relevant outcome | Yes |
-| FR-07 | Copy task context into an AI prompt | Avoid having to explain the same task repeatedly when continuing development | Yes |
-| FR-08 | Link project deliverables | Keep the demonstration, report, presentation and documentation easy to find | No |
-
-## 15. Non-Functional Requirements
-
-IDs use the prefix `NFR`.
-
-| ID | Requirement | Justification | MVP (Yes/No) |
-| --- | --- | --- | --- |
-| NFR-01 | Simple, easy-to-use interface | People should be able to use the tracker without needing instructions for every action | Yes |
-| NFR-02 | Save tasks when the browser refreshes | Work shouldn't disappear when the browser is refreshed | Yes |
-| NFR-03 | Work in modern desktop browsers | The prototype needs to run reliably during the demonstration | Yes |
-| NFR-04 | Consistent colours, typography and layout | Colours and labels should make task types and statuses easy to recognise | Yes |
-| NFR-05 | Clear feedback when actions are completed | Users should know whether a task has been saved, updated or deleted | No |
-
-## 16. Data Requirements
-
-IDs use the prefix `DR`.
-
-| ID | Requirement | Justification | MVP (Yes/No) |
-| --- | --- | --- | --- |
-| DR-01 | Unique task ID | Generated by the application to identify each task | Yes |
-| DR-02 | Task title and description | Entered by the user to explain the work | Yes |
-| DR-03 | Task status and type | Selected from predefined options to organise the Kanban board | Yes |
-| DR-04 | Assignee and relevant dates | Entered or selected to track responsibility and deadlines | No |
-| DR-05 | AI context and tool information | Entered by the user to preserve development information | Yes |
-| DR-06 | Project deliverable URLs | Supplied by the user to link to project resources | No |
-
----
-
-*PRD version: hackathon-starter v1 · maintained by Prof. Dr. Ignacio Alvarez*
+The original milestone sequence (data model, CRUD, task owner, due dates, AI context/copy and Anchor Board) remains useful project history. This document describes the implemented prototype rather than treating the starter PRD's `<TODO>` values or old requirement numbering as current specifications.
